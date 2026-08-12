@@ -13,7 +13,7 @@ export function Header() {
           <Link href="/#process">Как работает</Link>
           <Link href="/#price">Цена</Link>
         </nav>
-        <a className="header-cta" href="https://t.me/kruger79" target="_blank" rel="noreferrer">Связаться <span aria-hidden="true">↗</span></a>
+        <Link className="header-cta" href="/payment">Оплатить <span aria-hidden="true">→</span></Link>
       </div>
     </header>
   );
@@ -34,7 +34,7 @@ export function Footer() {
           <span>Исполнитель: Сурков Александр Игоревич</span>
           <span>ИНН 631608072510 · плательщик НПД</span>
           <span>Самара, Самарская область</span>
-          <span>После оплаты выдаётся чек самозанятого</span>
+          <span>Онлайн-оплата и автоматический чек НПД через Robokassa</span>
         </div>
         <div className="footer-links">
           <a href="mailto:beastsahsa@yandex.ru">beastsahsa@yandex.ru</a>

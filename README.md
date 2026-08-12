@@ -1,8 +1,26 @@
-# vinext-starter
+# ПожТендер
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Лендинг и безопасный платёжный контур сервиса ПожТендер. Сайт работает на
+[vinext](https://github.com/cloudflare/vinext), а платёжная страница и чеки НПД — на стороне Robokassa.
+
+## Платёжные переменные
+
+Секреты задаются только в окружении хостинга:
+
+- `ROBOKASSA_MERCHANT_LOGIN`
+- `ROBOKASSA_PASSWORD_1`
+- `ROBOKASSA_PASSWORD_2`
+- `ROBOKASSA_TEST_MODE=true` для тестовой среды
+- `ROBOKASSA_B2B_RECEIPT_CONFIRMED=true` только после успешного B2B-теста чека с ИНН заказчика
+
+Пока последняя переменная не установлена, кнопка оплаты безопасно переводит на страницу «подключается».
+
+В кабинете Robokassa нужно выбрать SHA-256 и настроить:
+
+- ResultURL: `https://<домен>/api/payment/result`, метод POST
+- SuccessURL: `https://<домен>/payment/success`, метод GET
+- FailURL: `https://<домен>/payment/failed`, метод GET
+- фискализация: «Робочеки СМЗ» / «Самозанятые ФНС», с подтверждением доступа в «Мой налог»
 
 ## Prerequisites
 

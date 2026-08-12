@@ -1,8 +1,7 @@
 import { Footer, Header } from "./site-chrome";
 
-const tgUrl = "https://t.me/kruger79";
 const mailUrl =
-  "mailto:beastsahsa@yandex.ru?subject=%D0%9F%D0%BE%D0%B6%D0%A2%D0%B5%D0%BD%D0%B4%D0%B5%D1%80%20%E2%80%94%20%D0%B7%D0%B0%D0%BF%D1%80%D0%BE%D1%81%20%D1%81%D1%87%D1%91%D1%82%D0%B0&body=%D0%9D%D0%B0%D0%B7%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5%20%D0%BA%D0%BE%D0%BC%D0%BF%D0%B0%D0%BD%D0%B8%D0%B8%3A%0A%D0%98%D0%9D%D0%9D%3A%0A%D0%A0%D0%B5%D0%B3%D0%B8%D0%BE%D0%BD%D1%8B%20%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%8B%3A%0A%D0%9A%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%3A";
+  "mailto:beastsahsa@yandex.ru?subject=%D0%9F%D0%BE%D0%B6%D0%A2%D0%B5%D0%BD%D0%B4%D0%B5%D1%80%20%E2%80%94%20%D1%81%D1%87%D1%91%D1%82%20%D0%B4%D0%BB%D1%8F%20%D0%AE%D0%9B%2F%D0%98%D0%9F&body=%D0%9D%D0%B0%D0%B7%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5%20%D0%BA%D0%BE%D0%BC%D0%BF%D0%B0%D0%BD%D0%B8%D0%B8%3A%0A%D0%98%D0%9D%D0%9D%3A%0A%D0%A0%D0%B5%D0%B3%D0%B8%D0%BE%D0%BD%D1%8B%20%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%8B%3A%0A%D0%9A%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%3A";
 
 const verdicts = [
   {
@@ -42,9 +41,9 @@ export default function Home() {
             лицензия, регион, сумма, сроки, обеспечение и полнота документов.
           </p>
           <div className="hero-actions">
-            <a className="button button-primary" href={tgUrl} target="_blank" rel="noreferrer">
-              Получить счёт на 4 900 ₽
-              <span aria-hidden="true">↗</span>
+            <a className="button button-primary" href="/payment">
+              Оплатить 4 900 ₽ онлайн
+              <span aria-hidden="true">→</span>
             </a>
             <a className="button button-secondary" href="#example">
               Посмотреть пример
@@ -208,11 +207,11 @@ export default function Home() {
               <li>Доставка в Telegram или email</li>
               <li>Чек самозанятого</li>
             </ul>
-            <a className="button button-primary full" href={mailUrl}>
-              Запросить счёт
+            <a className="button button-primary full" href="/payment">
+              Оплатить онлайн
               <span aria-hidden="true">→</span>
             </a>
-            <p>Далее — 7 900 ₽/мес. только после вашего подтверждения.</p>
+            <p>Карта или СБП на защищённой странице. Чек НПД приходит автоматически. Далее — 7 900 ₽/мес. только после вашего подтверждения.</p>
           </div>
         </div>
       </section>
@@ -237,8 +236,8 @@ export default function Home() {
             <h2>Покажите, какие заказы вам нужны.</h2>
           </div>
           <div className="closing-actions">
-            <a className="button button-primary" href={tgUrl} target="_blank" rel="noreferrer">Написать в Telegram <span aria-hidden="true">↗</span></a>
-            <a className="text-link" href={mailUrl}>или отправить email →</a>
+            <a className="button button-primary" href="/payment">Оплатить онлайн <span aria-hidden="true">→</span></a>
+            <a className="text-link" href={mailUrl}>или запросить счёт для ЮЛ/ИП →</a>
           </div>
         </div>
       </section>
