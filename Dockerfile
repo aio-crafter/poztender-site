@@ -10,6 +10,9 @@ FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
     PORT=8080
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/server.mjs ./server.mjs
@@ -17,5 +20,5 @@ COPY --from=build --chown=node:node /app/server.mjs ./server.mjs
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  CMD curl -fsS http://localhost:8080/health || exit 1
 CMD ["node", "server.mjs"]
