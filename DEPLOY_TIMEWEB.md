@@ -19,7 +19,7 @@
 - `ROBOKASSA_PASSWORD_1`
 - `ROBOKASSA_PASSWORD_2`
 - `ROBOKASSA_TEST_MODE=true` для первой проверки
-- `ROBOKASSA_B2B_RECEIPT_CONFIRMED=false`, пока Robokassa не подтвердит корректное формирование B2B-чека НПД
+- `ROBOKASSA_B2B_RECEIPT_CONFIRMED=false`, пока Robokassa не подтвердит корректное формирование B2B-чека НПД. При `ROBOKASSA_TEST_MODE=true` тестовая оплата доступна и с этим безопасным значением; боевой режим останется заблокирован.
 
 Пока последняя переменная равна `false`, кнопка оплаты безопасно ведёт на страницу «Онлайн-оплата подключается» и не создаёт платёж.
 

@@ -16,11 +16,15 @@ export interface RobokassaEnvironment {
 }
 
 export function isPaymentReady(env: RobokassaEnvironment) {
+  const isTestPayment = env.ROBOKASSA_TEST_MODE === "true";
+  const isLiveReceiptConfirmed =
+    env.ROBOKASSA_B2B_RECEIPT_CONFIRMED === "true";
+
   return Boolean(
     env.ROBOKASSA_MERCHANT_LOGIN &&
       env.ROBOKASSA_PASSWORD_1 &&
       env.ROBOKASSA_PASSWORD_2 &&
-      env.ROBOKASSA_B2B_RECEIPT_CONFIRMED === "true",
+      (isTestPayment || isLiveReceiptConfirmed),
   );
 }
 
@@ -109,4 +113,3 @@ export function escapeHtml(value: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
-

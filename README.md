@@ -11,7 +11,7 @@
 - `ROBOKASSA_PASSWORD_1`
 - `ROBOKASSA_PASSWORD_2`
 - `ROBOKASSA_TEST_MODE=true` для тестовой среды
-- `ROBOKASSA_B2B_RECEIPT_CONFIRMED=true` только после успешного B2B-теста чека с ИНН заказчика
+- `ROBOKASSA_B2B_RECEIPT_CONFIRMED=true` только после успешного B2B-теста чека с ИНН заказчика. Для тестовой оплаты оставьте `false`: она разрешается отдельно через `ROBOKASSA_TEST_MODE=true`, без открытия боевых платежей.
 
 Пока последняя переменная не установлена, кнопка оплаты безопасно переводит на страницу «подключается».
 

@@ -72,7 +72,7 @@ test("creates a signed checkout and validates the payment callback", async () =>
     process.env.ROBOKASSA_PASSWORD_1 = "test-password-one";
     process.env.ROBOKASSA_PASSWORD_2 = "test-password-two";
     process.env.ROBOKASSA_TEST_MODE = "true";
-    process.env.ROBOKASSA_B2B_RECEIPT_CONFIRMED = "true";
+    process.env.ROBOKASSA_B2B_RECEIPT_CONFIRMED = "false";
 
     const checkout = await render("/api/payment/start");
     assert.equal(checkout.status, 200);
