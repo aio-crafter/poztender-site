@@ -12,9 +12,11 @@ export function Header() {
           <Link href="/#example">Пример</Link>
           <Link href="/#process">Как работает</Link>
           <Link href="/#price">Цена</Link>
-          <Link className="nav-offer" href="/offer">Оферта</Link>
         </nav>
-        <Link className="header-cta" href="/payment">Оплатить <span aria-hidden="true">→</span></Link>
+        <div className="header-actions">
+          <Link className="header-offer" href="/offer">Оферта</Link>
+          <Link className="header-cta" href="/payment">Оплатить <span aria-hidden="true">→</span></Link>
+        </div>
       </div>
     </header>
   );

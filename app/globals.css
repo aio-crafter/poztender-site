@@ -35,7 +35,8 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--amber); outline
 nav { display: flex; align-items: center; gap: 32px; }
 nav a, .header-cta { font-size: 14px; font-weight: 650; text-decoration: none; }
 nav a:hover { text-decoration: underline; }
-.nav-offer { padding: 8px 11px; border: 1px solid var(--ink); }
+.header-actions { display: flex; align-items: center; gap: 18px; }
+.header-offer { padding: 8px 11px; border: 1px solid var(--ink); font-size: 13px; font-weight: 700; text-decoration: none; }
 .header-cta { border-bottom: 2px solid var(--ink); padding: 10px 0 7px; }
 
 .hero { min-height: 680px; display: grid; grid-template-columns: 1.4fr .78fr; gap: 70px; align-items: center; padding-block: 84px 92px; }
@@ -205,6 +206,7 @@ nav a:hover { text-decoration: underline; }
 @media (max-width: 640px) {
   .shell { width: min(100% - 32px, 1180px); }
   .site-header nav { display: none; }
+  .header-actions { gap: 12px; }
   .nav-wrap { min-height: 66px; }
   .header-cta { min-height: 44px; display: inline-flex; align-items: center; }
   .hero { padding-block: 62px 68px; gap: 52px; }
@@ -243,6 +245,10 @@ nav a:hover { text-decoration: underline; }
   .payment-facts > div { grid-template-columns: 1fr; gap: 4px; }
   .checkout-card { padding: 28px 22px; box-shadow: 7px 7px 0 var(--acid); }
   .result-page { min-height: 0; padding-block: 64px 88px; }
+}
+
+@media (max-width: 460px) {
+  .site-header .brand > span:last-child { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
