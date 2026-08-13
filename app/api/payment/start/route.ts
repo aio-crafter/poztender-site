@@ -16,6 +16,11 @@ export async function GET(request: Request) {
     return Response.redirect(new URL("/payment/unavailable", request.url), 303);
   }
 
+  const email = new URL(request.url).searchParams.get("email")?.trim().toLowerCase() ?? "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+    return Response.redirect(new URL("/payment?error=email", request.url), 303);
+  }
+
   const merchantLogin = runtimeEnv.ROBOKASSA_MERCHANT_LOGIN!;
   const invoiceId = createInvoiceId();
   const receipt = createReceipt();
@@ -39,6 +44,7 @@ export async function GET(request: Request) {
     SignatureValue: signature,
     Receipt: receipt,
     Culture: "ru",
+    Email: email,
     IsTest: runtimeEnv.ROBOKASSA_TEST_MODE === "true" ? "1" : "0",
     SuccessUrl2: successUrl,
     SuccessUrl2Method: "GET",

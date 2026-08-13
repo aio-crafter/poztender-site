@@ -29,9 +29,15 @@ export default function PaymentPage() {
           <span className="price-name">К оплате</span>
           <div className="price">4 900 <small>₽</small></div>
           <p>Без НДС в связи с применением НПД.</p>
-          <a className="button button-primary full" href="/api/payment/start">
-            Оплатить онлайн <span aria-hidden="true">→</span>
-          </a>
+          <form className="checkout-form" action="/api/payment/start" method="get">
+            <label>
+              Email для уведомления о платеже
+              <input name="email" type="email" required maxLength={160} autoComplete="email" placeholder="name@company.ru" />
+            </label>
+            <button className="button button-primary full" type="submit">
+              Оплатить онлайн <span aria-hidden="true">→</span>
+            </button>
+          </form>
           <p className="checkout-consent">
             Нажимая кнопку, вы принимаете <a href="/offer">публичную оферту</a> и подтверждаете ознакомление с <a href="/privacy">политикой данных</a>.
           </p>

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render(path = "/") {
+async function render(path = "/", init) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${path}`);
   const { default: worker } = await import(workerUrl.href);
@@ -11,6 +11,7 @@ async function render(path = "/") {
   return worker.fetch(
     new Request(`https://poztender.example${path}`, {
       headers: { accept: "text/html", "x-forwarded-proto": "https" },
+      ...init,
     }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
@@ -57,6 +58,50 @@ test("renders payment pages and keeps checkout unavailable without secrets", asy
   assert.match(await unavailable.text(), /Онлайн-оплата подключается/);
 });
 
+test("renders the single intake form with a reply channel choice", async () => {
+  const brief = await render("/brief?InvId=123456");
+  assert.equal(brief.status, 200);
+  const html = await brief.text();
+  assert.match(html, /Единая точка старта/);
+  assert.match(html, /name="replyChannel"/);
+  assert.match(html, /value="telegram"/);
+  assert.match(html, /value="email"/);
+  assert.match(html, /name="invoiceId" value="123456"/);
+});
+
+test("rejects an invalid intake and fails closed without the owner bot", async () => {
+  const invalid = await render("/api/intake", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.10" },
+    body: JSON.stringify({ company: "" }),
+  });
+  assert.equal(invalid.status, 400);
+
+  const validPayload = {
+    company: "ООО ПожСервис",
+    inn: "6312345678",
+    contactName: "Александр",
+    email: "client@example.ru",
+    telegram: "@client_test",
+    replyChannel: "telegram",
+    regions: "Самарская область",
+    workTypes: "Монтаж и обслуживание АПС и СОУЭ",
+    budget: "от 300 000 до 5 000 000 рублей",
+    licenses: "Лицензия МЧС",
+    exclusions: "Не менее пяти дней до подачи",
+    invoiceId: "123456",
+    website: "",
+    consent: true,
+  };
+  const unavailable = await render("/api/intake", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.11" },
+    body: JSON.stringify(validPayload),
+  });
+  assert.equal(unavailable.status, 503);
+  assert.match(await unavailable.text(), /Данные не отправлены/);
+});
+
 test("creates a signed checkout and validates the payment callback", async () => {
   const variableNames = [
     "ROBOKASSA_MERCHANT_LOGIN",
@@ -74,12 +119,13 @@ test("creates a signed checkout and validates the payment callback", async () =>
     process.env.ROBOKASSA_TEST_MODE = "true";
     process.env.ROBOKASSA_B2B_RECEIPT_CONFIRMED = "false";
 
-    const checkout = await render("/api/payment/start");
+    const checkout = await render("/api/payment/start?email=buyer%40example.ru");
     assert.equal(checkout.status, 200);
     const html = await checkout.text();
     assert.match(html, /auth\.robokassa\.ru\/Merchant\/Index\.aspx/);
     assert.match(html, /name="IsTest" value="1"/);
     assert.match(html, /name="Receipt"/);
+    assert.match(html, /name="Email" value="buyer@example.ru"/);
     assert.doesNotMatch(html, /test-password-one|test-password-two/);
 
     const outSum = "4900.00";
