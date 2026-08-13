@@ -8,9 +8,49 @@ export const dynamic = "force-dynamic";
 interface TelegramEnvironment {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_OWNER_CHAT_ID?: string;
+  TELEGRAM_OWNER_USERNAME?: string;
 }
 
 const rateLimits = new Map<string, number[]>();
+
+async function resolveOwnerChatId(
+  token: string,
+  configuredChatId: string,
+  configuredUsername: string,
+) {
+  if (/^-?\d{5,20}$/.test(configuredChatId)) return configuredChatId;
+
+  const ownerUsername = configuredUsername.replace(/^@/, "").toLowerCase();
+  if (!/^[a-z][a-z0-9_]{4,31}$/.test(ownerUsername)) return "";
+
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${token}/getUpdates?allowed_updates=%5B%22message%22%5D&limit=100`,
+      { cache: "no-store", signal: AbortSignal.timeout(8_000) },
+    );
+    if (!response.ok) return "";
+
+    const payload = (await response.json()) as {
+      result?: Array<{
+        message?: {
+          chat?: { id?: number; type?: string; username?: string };
+          from?: { username?: string };
+        };
+      }>;
+    };
+    const match = (payload.result ?? [])
+      .map((update) => update.message)
+      .filter((message) => message?.chat?.type === "private")
+      .findLast((message) => {
+        const username = message?.chat?.username ?? message?.from?.username ?? "";
+        return username.toLowerCase() === ownerUsername;
+      });
+
+    return match?.chat?.id ? String(match.chat.id) : "";
+  } catch {
+    return "";
+  }
+}
 
 function json(body: Record<string, unknown>, status: number) {
   return Response.json(body, {
@@ -62,11 +102,22 @@ export async function POST(request: Request) {
 
   const env = process.env as TelegramEnvironment;
   const token = env.TELEGRAM_BOT_TOKEN ?? "";
-  const chatId = env.TELEGRAM_OWNER_CHAT_ID ?? "";
-  if (!/^\d{6,15}:[A-Za-z0-9_-]{30,}$/.test(token) || !/^-?\d{5,20}$/.test(chatId)) {
+  if (!/^\d{6,15}:[A-Za-z0-9_-]{30,}$/.test(token)) {
     return json({
       ok: false,
       error: "Канал приёма анкет временно настраивается. Данные не отправлены — воспользуйтесь контактом ниже.",
+    }, 503);
+  }
+
+  const chatId = await resolveOwnerChatId(
+    token,
+    env.TELEGRAM_OWNER_CHAT_ID ?? "",
+    env.TELEGRAM_OWNER_USERNAME ?? "kruger79",
+  );
+  if (!chatId) {
+    return json({
+      ok: false,
+      error: "Канал приёма анкет ждёт активации. Владелец должен один раз отправить боту /start.",
     }, 503);
   }
 
