@@ -34,7 +34,7 @@ export default function PaymentPage() {
             Оплатить онлайн <span aria-hidden="true">→</span>
           </a>
           <p className="checkout-consent">
-            Нажимая кнопку, вы принимаете <Link href="/offer">условия услуги</Link> и подтверждаете ознакомление с <Link href="/privacy">политикой данных</Link>.
+            Нажимая кнопку, вы принимаете <Link href="/offer">публичную оферту</Link> и подтверждаете ознакомление с <Link href="/privacy">политикой данных</Link>.
           </p>
           <div className="provider-note">
             <span aria-hidden="true">◆</span>
@@ -46,4 +46,3 @@ export default function PaymentPage() {
     </main>
   );
 }
-

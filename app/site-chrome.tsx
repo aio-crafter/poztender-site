@@ -39,7 +39,7 @@ export function Footer() {
         <div className="footer-links">
           <a href="mailto:beastsahsa@yandex.ru">beastsahsa@yandex.ru</a>
           <a href="https://t.me/kruger79" target="_blank" rel="noreferrer">Telegram: @kruger79</a>
-          <a href="/offer">Условия оказания услуги</a>
+          <a href="/offer">Публичная оферта</a>
           <a href="/privacy">Политика обработки данных</a>
         </div>
       </div>

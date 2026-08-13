@@ -35,7 +35,7 @@ test("renders the service terms and privacy policy", async () => {
   const [offer, privacy] = await Promise.all([render("/offer"), render("/privacy")]);
   assert.equal(offer.status, 200);
   assert.equal(privacy.status, 200);
-  assert.match(await offer.text(), /Условия оказания услуги/);
+  assert.match(await offer.text(), /Публичная оферта/);
   assert.match(await privacy.text(), /Политика обработки персональных данных/);
 });
 
