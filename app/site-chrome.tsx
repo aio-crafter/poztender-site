@@ -1,21 +1,19 @@
-import Link from "next/link";
-
 export function Header() {
   return (
     <header className="site-header">
       <div className="shell nav-wrap">
-        <Link className="brand" href="/" aria-label="ПожТендер — главная">
+        <a className="brand" href="/" aria-label="ПожТендер — главная">
           <span className="brand-mark" aria-hidden="true">ПТ</span>
           <span>ПожТендер</span>
-        </Link>
+        </a>
         <nav aria-label="Основная навигация">
-          <Link href="/#example">Пример</Link>
-          <Link href="/#process">Как работает</Link>
-          <Link href="/#price">Цена</Link>
+          <a href="/#example">Пример</a>
+          <a href="/#process">Как работает</a>
+          <a href="/#price">Цена</a>
         </nav>
         <div className="header-actions">
-          <Link className="header-offer" href="/offer">Оферта</Link>
-          <Link className="header-cta" href="/payment">Оплатить <span aria-hidden="true">→</span></Link>
+          <a className="header-offer" href="/offer">Оферта</a>
+          <a className="header-cta" href="/payment">Оплатить <span aria-hidden="true">→</span></a>
         </div>
       </div>
     </header>
@@ -27,10 +25,10 @@ export function Footer() {
     <footer className="site-footer">
       <div className="shell footer-grid">
         <div>
-          <Link className="brand brand-footer" href="/">
+          <a className="brand brand-footer" href="/">
             <span className="brand-mark" aria-hidden="true">ПТ</span>
             <span>ПожТендер</span>
-          </Link>
+          </a>
           <p>Автономный радар закупок по АПС и СОУЭ.</p>
         </div>
         <div className="footer-details">

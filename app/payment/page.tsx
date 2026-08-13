@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Footer, Header } from "../site-chrome";
 
 export const metadata: Metadata = {
@@ -34,7 +33,7 @@ export default function PaymentPage() {
             Оплатить онлайн <span aria-hidden="true">→</span>
           </a>
           <p className="checkout-consent">
-            Нажимая кнопку, вы принимаете <Link href="/offer">публичную оферту</Link> и подтверждаете ознакомление с <Link href="/privacy">политикой данных</Link>.
+            Нажимая кнопку, вы принимаете <a href="/offer">публичную оферту</a> и подтверждаете ознакомление с <a href="/privacy">политикой данных</a>.
           </p>
           <div className="provider-note">
             <span aria-hidden="true">◆</span>

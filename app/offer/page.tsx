@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Footer, Header } from "../site-chrome";
 
 export const metadata: Metadata = {
@@ -130,15 +129,15 @@ export default function OfferPage() {
             <h2>{section.title}</h2>
             <div className="legal-copy">
               {section.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-              {section.title.startsWith("8.") && <p><Link href="/privacy">Политика обработки персональных данных</Link></p>}
-              {section.title.startsWith("12.") && <p>Сайт: <Link href="/">poztender.surkov163russ.chatgpt.site</Link></p>}
+              {section.title.startsWith("8.") && <p><a href="/privacy">Политика обработки персональных данных</a></p>}
+              {section.title.startsWith("12.") && <p>Сайт: <a href="/">ПожТендер</a></p>}
             </div>
           </section>
         ))}
 
         <div className="legal-callout">
           <strong>Как начать</strong>
-          <p><Link href="/payment">Оплатите калибровку онлайн</Link>, затем передайте критерии радара в <a href="https://t.me/kruger79">Telegram</a> или по <a href="mailto:beastsahsa@yandex.ru">email</a>. Для оплаты с расчётного счёта ООО или ИП запросите индивидуальный счёт.</p>
+          <p><a href="/payment">Оплатите калибровку онлайн</a>, затем передайте критерии радара в <a href="https://t.me/kruger79">Telegram</a> или по <a href="mailto:beastsahsa@yandex.ru">email</a>. Для оплаты с расчётного счёта ООО или ИП запросите индивидуальный счёт.</p>
         </div>
       </article>
       <Footer />

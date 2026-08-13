@@ -27,7 +27,7 @@ test("renders the sales page with honest CTA and demonstration", async () => {
   assert.match(html, /Оплатить 4 900 ₽ онлайн/);
   assert.match(html, /Демонстрационный пример/);
   assert.match(html, /без автопродления/i);
-  assert.match(html, /href="\/offer"[^>]*class="header-offer"[^>]*>Оферта</);
+  assert.match(html, /<a[^>]*(?:href="\/offer"[^>]*class="header-offer"|class="header-offer"[^>]*href="\/offer")[^>]*>Оферта<\/a>/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
   assert.match(html, /не гарантируем победу/i);
 });
