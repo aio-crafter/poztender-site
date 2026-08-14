@@ -44,6 +44,7 @@ export function Footer() {
           <a href="/offer">Публичная оферта</a>
           <a href="/privacy">Политика обработки данных</a>
           <a href="/payment">Оплата и анкета</a>
+          <a href="/renew">Продлить обслуживание</a>
         </div>
       </div>
       <div className="shell footer-bottom">
@@ -51,5 +52,24 @@ export function Footer() {
         <span>Информационно-аналитический сервис</span>
       </div>
     </footer>
+  );
+}
+
+const STEP_LABELS = ["Оплата", "Анкета", "Готово"];
+
+export function Steps({ current }: { current: 1 | 2 | 3 }) {
+  return (
+    <ol className="steps shell" aria-label="Шаги оформления">
+      {STEP_LABELS.map((label, index) => {
+        const step = index + 1;
+        const state = step === current ? "active" : step < current ? "done" : "";
+        return (
+          <li key={label} className={`step ${state}`.trim()}>
+            <span className="step-num" aria-hidden="true">{step < current ? "✓" : step}</span>
+            <span>{label}</span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
