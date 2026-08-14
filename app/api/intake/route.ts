@@ -21,6 +21,11 @@ interface TelegramEnvironment {
 const rateLimits = new Map<string, number[]>();
 const usedAccessTokens = new Map<string, number>();
 
+// Prefer an explicitly configured owner chat id. Falling back to scanning
+// getUpdates() is fragile: Telegram only retains a limited backlog of
+// updates, so if the owner has not messaged the bot recently, a paid
+// customer's submission can silently fail to deliver. Always set
+// TELEGRAM_OWNER_CHAT_ID in the hosting panel for reliable delivery.
 async function resolveOwnerChatId(
   token: string,
   configuredChatId: string,
@@ -85,7 +90,8 @@ async function sendThroughRelay(
       body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(12_000),
     });
-  } catch {
+  } catch (error) {
+    console.error("[intake] telegram relay request threw", error);
     return new Response(null, { status: 502 });
   }
 }
@@ -170,6 +176,7 @@ export async function POST(request: Request) {
   const env = process.env as TelegramEnvironment;
   const token = env.TELEGRAM_BOT_TOKEN ?? "";
   if (!/^\d{6,15}:[A-Za-z0-9_-]{30,}$/.test(token)) {
+    console.error("[intake] TELEGRAM_BOT_TOKEN is missing or malformed");
     return json({
       ok: false,
       error: "Канал приёма анкет временно настраивается. Данные не отправлены — воспользуйтесь контактом ниже.",
@@ -177,16 +184,21 @@ export async function POST(request: Request) {
   }
 
   const notification = createIntakeNotification(validation.data);
+
+  // Try the relay first (used when direct calls to api.telegram.org are
+  // blocked from the main hosting). Previously, any relay failure returned
+  // an error immediately instead of falling back to a direct Telegram API
+  // call, which could drop an already-paid customer's submission even
+  // though a direct send might have succeeded.
   const relayResponse = await sendThroughRelay(env, token, notification);
+  if (relayResponse?.ok) {
+    usedAccessTokens.set(accessKey, Number(accessExpires));
+    return json({ ok: true }, 201);
+  }
   if (relayResponse) {
-    if (relayResponse.ok) {
-      usedAccessTokens.set(accessKey, Number(accessExpires));
-      return json({ ok: true }, 201);
-    }
-    return json({
-      ok: false,
-      error: "Канал уведомлений временно недоступен. Попробуйте ещё раз или воспользуйтесь контактом ниже.",
-    }, 502);
+    console.error(
+      `[intake] telegram relay failed with status ${relayResponse.status}; falling back to direct Telegram API`,
+    );
   }
 
   const chatId = await resolveOwnerChatId(
@@ -195,6 +207,9 @@ export async function POST(request: Request) {
     env.TELEGRAM_OWNER_USERNAME ?? "kruger79",
   );
   if (!chatId) {
+    console.error(
+      "[intake] could not resolve owner chat id; set TELEGRAM_OWNER_CHAT_ID to avoid dropping paid submissions",
+    );
     return json({
       ok: false,
       error: "Канал приёма анкет ждёт активации. Владелец должен один раз отправить боту /start.",
@@ -214,7 +229,8 @@ export async function POST(request: Request) {
       }),
       signal: AbortSignal.timeout(8_000),
     });
-  } catch {
+  } catch (error) {
+    console.error("[intake] direct Telegram sendMessage request threw", error);
     return json({
       ok: false,
       error: "Не удалось доставить анкету. Данные не потеряны в форме — попробуйте ещё раз.",
@@ -222,6 +238,7 @@ export async function POST(request: Request) {
   }
 
   if (!telegramResponse.ok) {
+    console.error(`[intake] direct Telegram sendMessage failed with status ${telegramResponse.status}`);
     return json({
       ok: false,
       error: "Канал уведомлений временно недоступен. Попробуйте ещё раз или воспользуйтесь контактом ниже.",
