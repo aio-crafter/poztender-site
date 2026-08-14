@@ -94,6 +94,41 @@ export async function createResultSignature(input: {
   return sha256Hex(`${input.outSum}:${input.invoiceId}:${input.password}`);
 }
 
+export async function createIntakeAccessToken(input: {
+  invoiceId: string;
+  outSum: string;
+  expires: string;
+  password: string;
+}) {
+  return sha256Hex(
+    `poztender-intake:${input.invoiceId}:${input.outSum}:${input.expires}:${input.password}`,
+  );
+}
+
+export async function isIntakeAccessValid(input: {
+  invoiceId: string;
+  outSum: string;
+  expires: string;
+  accessToken: string;
+  password: string;
+}) {
+  if (
+    !/^\d{1,19}$/.test(input.invoiceId) ||
+    Number(input.outSum) !== Number(paymentProduct.amount) ||
+    !/^\d{10}$/.test(input.expires) ||
+    !/^[a-f\d]{64}$/i.test(input.accessToken)
+  ) {
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const expires = Number(input.expires);
+  if (expires <= now || expires > now + 7 * 24 * 60 * 60 + 300) return false;
+
+  const expected = await createIntakeAccessToken(input);
+  return safeEqualHex(input.accessToken, expected);
+}
+
 export function safeEqualHex(left: string, right: string) {
   const a = left.toLowerCase();
   const b = right.toLowerCase();
