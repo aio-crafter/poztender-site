@@ -1,7 +1,7 @@
 import {
   createResultSignature,
   isPaymentReady,
-  paymentProduct,
+  planForAmount,
   safeEqualHex,
   type RobokassaEnvironment,
 } from "../../../../lib/robokassa";
@@ -34,7 +34,7 @@ async function handleResult(request: Request) {
 
   if (
     !/^\d{1,19}$/.test(invoiceId) ||
-    Number(outSum) !== Number(paymentProduct.amount) ||
+    !planForAmount(outSum) ||
     !/^[a-f\d]{64}$/i.test(receivedSignature)
   ) {
     return new Response("Invalid payment notification", { status: 400 });
