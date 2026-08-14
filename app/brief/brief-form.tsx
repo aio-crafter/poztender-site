@@ -26,7 +26,6 @@ const DRAFT_TEXT_FIELDS = [
 const COUNTED_FIELDS: Record<string, number> = {
   regions: 500,
   workTypes: 1200,
-  licenses: 800,
   exclusions: 1200,
 };
 
@@ -242,17 +241,21 @@ export function BriefForm({
             <small>Удобнее для документов и длинных ответов</small>
           </label>
         </div>
-        <label className="telegram-field">
-          Telegram {replyChannel === "telegram" && <b>*</b>}
-          <input
-            name="telegram"
-            maxLength={40}
-            required={replyChannel === "telegram"}
-            placeholder="@username или +7 999 123-45-67"
-            autoComplete="off"
-          />
-          <span className="field-hint">Укажите @username или номер телефона, привязанный к Telegram.</span>
-        </label>
+        {replyChannel === "telegram" ? (
+          <label className="telegram-field">
+            Telegram <b>*</b>
+            <input
+              name="telegram"
+              maxLength={40}
+              required
+              placeholder="@username или +7 999 123-45-67"
+              autoComplete="off"
+            />
+            <span className="field-hint">Укажите @username или номер телефона, привязанный к Telegram.</span>
+          </label>
+        ) : (
+          <p className="field-hint">Ответ придёт на email, указанный выше в контактных данных.</p>
+        )}
       </fieldset>
 
       <fieldset>
@@ -276,7 +279,6 @@ export function BriefForm({
             <label>
               Лицензии и допуски
               <input name="licenses" maxLength={800} placeholder="Какие виды лицензии МЧС доступны" />
-              <span className={`char-counter${(lengths.licenses ?? 0) >= 800 ? " limit" : ""}`}>{lengths.licenses ?? 0} / 800</span>
             </label>
           </div>
           <label>
