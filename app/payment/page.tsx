@@ -1,17 +1,31 @@
 import type { Metadata } from "next";
-import { Footer, Header } from "../site-chrome";
+import { Footer, Header, Steps } from "../site-chrome";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Оплата калибровки — ПожТендер",
   description: "Онлайн-оплата 7-дневной калибровки ПожТендера.",
 };
 
-export default function PaymentPage() {
+interface PaymentPageProps {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+function first(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+export default async function PaymentPage({ searchParams }: PaymentPageProps) {
+  const parameters = await searchParams;
+  const hasEmailError = first(parameters.error) === "email";
+
   return (
     <main>
       <Header />
       <section className="payment-page shell">
         <div className="payment-copy">
+          <Steps current={1} />
           <p className="eyebrow">Безопасная онлайн-оплата</p>
           <h1>Запустить калибровку</h1>
           <p className="payment-lead">
@@ -29,6 +43,11 @@ export default function PaymentPage() {
           <span className="price-name">К оплате</span>
           <div className="price">4 900 <small>₽</small></div>
           <p>Без НДС в связи с применением НПД.</p>
+          {hasEmailError && (
+            <p className="checkout-error" role="alert">
+              Не удалось распознать email. Проверьте адрес и попробуйте ещё раз.
+            </p>
+          )}
           <form className="checkout-form" action="/api/payment/start" method="get">
             <label>
               Email для уведомления о платеже
@@ -38,6 +57,12 @@ export default function PaymentPage() {
               Оплатить онлайн <span aria-hidden="true">→</span>
             </button>
           </form>
+          <div className="payment-badges" aria-label="Способы оплаты">
+            <span>МИР</span>
+            <span>VISA</span>
+            <span>Mastercard</span>
+            <span>СБП</span>
+          </div>
           <p className="checkout-consent">
             Нажимая кнопку, вы принимаете <a href="/offer">публичную оферту</a> и подтверждаете ознакомление с <a href="/privacy">политикой данных</a>.
           </p>
