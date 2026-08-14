@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Footer, Header } from "../site-chrome";
+import { Footer, Header, Steps } from "../site-chrome";
 import { BriefForm } from "./brief-form";
 import { isIntakeAccessValid, type RobokassaEnvironment } from "../../lib/robokassa";
 
@@ -41,8 +41,9 @@ export default async function BriefPage({ searchParams }: BriefPageProps) {
           <span className="result-mark failed" aria-hidden="true">₽</span>
           <p className="eyebrow">Анкета доступна после оплаты</p>
           <h1>Сначала активируйте 7-дневную калибровку.</h1>
-          <p>После подтверждённой оплаты Robokassa автоматически вернёт вас на персональную ссылку с анкетой. Обычная ссылка без платёжного пропуска отправку не открывает.</p>
+          <p>После подтверждённой оплаты Robokassa автоматически вернёт вас на персональную ссылку с анкетой. Обычная ссылка без платёжного пропуска анкету не открывает.</p>
           <a className="button button-primary" href="/payment">Перейти к оплате <span aria-hidden="true">→</span></a>
+          <p className="microcopy">Уже оплатили, но ссылка не открывается или истекла? Напишите нам: <a href="https://t.me/kruger79" target="_blank" rel="noreferrer">@kruger79</a> или <a href="mailto:beastsahsa@yandex.ru">beastsahsa@yandex.ru</a> — вышлем анкету вручную.</p>
         </section>
         <Footer />
       </main>
@@ -54,6 +55,7 @@ export default async function BriefPage({ searchParams }: BriefPageProps) {
       <Header />
       <section className="brief-page shell">
         <header className="brief-heading">
+          <Steps current={2} />
           <p className="eyebrow">Единая точка старта</p>
           <h1>Настроим радар под вашу компанию</h1>
           <p>Заполните один раз и выберите, куда прислать ответ — в Telegram или на email. Пароли, ЭЦП, данные карт и доступы к ЭТП не нужны.</p>
