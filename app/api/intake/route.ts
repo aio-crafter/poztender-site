@@ -6,6 +6,10 @@ import {
   isIntakeAccessValid,
   type RobokassaEnvironment,
 } from "../../../lib/robokassa";
+import {
+  sendIntakeConfirmationEmail,
+  type EmailEnvironment,
+} from "../../../lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -185,6 +189,18 @@ export async function POST(request: Request) {
 
   const notification = createIntakeNotification(validation.data);
 
+  async function notifyByEmail() {
+    try {
+      await sendIntakeConfirmationEmail(process.env as EmailEnvironment, {
+        to: validation.data.email,
+        company: validation.data.company,
+        contactName: validation.data.contactName,
+      });
+    } catch (error) {
+      console.error("[intake] confirmation email threw", error);
+    }
+  }
+
   // Try the relay first (used when direct calls to api.telegram.org are
   // blocked from the main hosting). Previously, any relay failure returned
   // an error immediately instead of falling back to a direct Telegram API
@@ -193,6 +209,7 @@ export async function POST(request: Request) {
   const relayResponse = await sendThroughRelay(env, token, notification);
   if (relayResponse?.ok) {
     usedAccessTokens.set(accessKey, Number(accessExpires));
+    await notifyByEmail();
     return json({ ok: true }, 201);
   }
   if (relayResponse) {
@@ -246,5 +263,6 @@ export async function POST(request: Request) {
   }
 
   usedAccessTokens.set(accessKey, Number(accessExpires));
+  await notifyByEmail();
   return json({ ok: true }, 201);
 }

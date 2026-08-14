@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 interface BriefFormProps {
   invoiceId?: string;
@@ -8,6 +8,27 @@ interface BriefFormProps {
   accessExpires?: string;
   accessToken?: string;
 }
+
+const DRAFT_KEY = "poztender-brief-draft";
+const DRAFT_TEXT_FIELDS = [
+  "company",
+  "inn",
+  "contactName",
+  "email",
+  "telegram",
+  "regions",
+  "workTypes",
+  "budget",
+  "licenses",
+  "exclusions",
+] as const;
+
+const COUNTED_FIELDS: Record<string, number> = {
+  regions: 500,
+  workTypes: 1200,
+  licenses: 800,
+  exclusions: 1200,
+};
 
 export function BriefForm({
   invoiceId = "",
@@ -18,6 +39,92 @@ export function BriefForm({
   const [replyChannel, setReplyChannel] = useState<"telegram" | "email">("telegram");
   const [status, setStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [lengths, setLengths] = useState<Record<string, number>>({});
+  const [draftRestored, setDraftRestored] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+
+    try {
+      const raw = window.localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as Record<string, string>;
+      let restored = false;
+
+      for (const field of DRAFT_TEXT_FIELDS) {
+        const value = draft[field];
+        if (!value) continue;
+        const element = form.elements.namedItem(field);
+        if (element && "value" in element) {
+          (element as HTMLInputElement | HTMLTextAreaElement).value = value;
+          restored = true;
+        }
+      }
+      if (draft.replyChannel === "telegram" || draft.replyChannel === "email") {
+        setReplyChannel(draft.replyChannel);
+        restored = true;
+      }
+
+      if (restored) {
+        setDraftRestored(true);
+        const counters: Record<string, number> = {};
+        for (const field of Object.keys(COUNTED_FIELDS)) {
+          const element = form.elements.namedItem(field);
+          if (element && "value" in element) {
+            counters[field] = (element as HTMLTextAreaElement).value.length;
+          }
+        }
+        setLengths(counters);
+      }
+    } catch {
+      // corrupted or unavailable draft — ignore
+    }
+  }, []);
+
+  function saveDraft() {
+    const form = formRef.current;
+    if (!form) return;
+    try {
+      const formData = new FormData(form);
+      const draft: Record<string, string> = { replyChannel };
+      for (const field of DRAFT_TEXT_FIELDS) {
+        const value = formData.get(field);
+        if (typeof value === "string" && value) draft[field] = value;
+      }
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      // storage unavailable — skip autosave silently
+    }
+  }
+
+  function handleFormChange() {
+    const form = formRef.current;
+    if (!form) return;
+
+    const counters: Record<string, number> = {};
+    for (const field of Object.keys(COUNTED_FIELDS)) {
+      const element = form.elements.namedItem(field);
+      if (element && "value" in element) {
+        counters[field] = (element as HTMLTextAreaElement).value.length;
+      }
+    }
+    setLengths((current) => ({ ...current, ...counters }));
+    saveDraft();
+  }
+
+  function clearDraft() {
+    try {
+      window.localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      // ignore
+    }
+    formRef.current?.reset();
+    setReplyChannel("telegram");
+    setLengths({});
+    setDraftRestored(false);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,6 +153,11 @@ export function BriefForm({
 
       setStatus("success");
       setMessage("Анкета доставлена. Мы проверим её и ответим выбранным способом.");
+      try {
+        window.localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // ignore
+      }
       form.reset();
       setReplyChannel("telegram");
     } catch {
@@ -66,7 +178,7 @@ export function BriefForm({
   }
 
   return (
-    <form className="brief-form" onSubmit={submit} noValidate={false}>
+    <form className="brief-form" ref={formRef} onSubmit={submit} onChange={handleFormChange} noValidate={false}>
       <input type="hidden" name="invoiceId" value={invoiceId} />
       <input type="hidden" name="outSum" value={outSum} />
       <input type="hidden" name="accessExpires" value={accessExpires} />
@@ -74,6 +186,13 @@ export function BriefForm({
       <div className="honeypot" aria-hidden="true">
         <label>Сайт<input name="website" tabIndex={-1} autoComplete="off" /></label>
       </div>
+
+      {draftRestored && (
+        <div className="draft-note">
+          <span>Восстановили черновик анкеты из прошлого визита.</span>
+          <button type="button" onClick={clearDraft}>Очистить</button>
+        </div>
+      )}
 
       <fieldset>
         <legend><span>01</span> Компания и контакт</legend>
@@ -127,11 +246,12 @@ export function BriefForm({
           Telegram {replyChannel === "telegram" && <b>*</b>}
           <input
             name="telegram"
-            maxLength={33}
+            maxLength={40}
             required={replyChannel === "telegram"}
-            placeholder="@username"
+            placeholder="@username или +7 999 123-45-67"
             autoComplete="off"
           />
+          <span className="field-hint">Укажите @username или номер телефона, привязанный к Telegram.</span>
         </label>
       </fieldset>
 
@@ -141,10 +261,12 @@ export function BriefForm({
           <label>
             Регионы поиска <b>*</b>
             <textarea name="regions" maxLength={500} required rows={3} placeholder="Например: Самарская область и соседние регионы" />
+            <span className={`char-counter${(lengths.regions ?? 0) >= 500 ? " limit" : ""}`}>{lengths.regions ?? 0} / 500</span>
           </label>
           <label>
             Виды работ и ключевые направления <b>*</b>
             <textarea name="workTypes" maxLength={1200} required rows={4} placeholder="Монтаж и обслуживание АПС, СОУЭ, пусконаладка…" />
+            <span className={`char-counter${(lengths.workTypes ?? 0) >= 1200 ? " limit" : ""}`}>{lengths.workTypes ?? 0} / 1200</span>
           </label>
           <div className="form-grid two-columns">
             <label>
@@ -154,11 +276,13 @@ export function BriefForm({
             <label>
               Лицензии и допуски
               <input name="licenses" maxLength={800} placeholder="Какие виды лицензии МЧС доступны" />
+              <span className={`char-counter${(lengths.licenses ?? 0) >= 800 ? " limit" : ""}`}>{lengths.licenses ?? 0} / 800</span>
             </label>
           </div>
           <label>
             Стоп-факторы и важные ограничения
             <textarea name="exclusions" maxLength={1200} rows={4} placeholder="Срок подачи, обеспечение, опыт, удалённость, конкретные работы…" />
+            <span className={`char-counter${(lengths.exclusions ?? 0) >= 1200 ? " limit" : ""}`}>{lengths.exclusions ?? 0} / 1200</span>
           </label>
         </div>
       </fieldset>
@@ -180,7 +304,7 @@ export function BriefForm({
         {status === "sending" ? "Отправляем…" : "Отправить анкету"}
         <span aria-hidden="true">→</span>
       </button>
-      <p className="form-note">Анкета сразу попадёт ответственному за запуск. Обычно уточнения приходят выбранным способом.</p>
+      <p className="form-note">Анкета сразу попадёт ответственному за запуск. Обычно уточнения приходят выбранным способом. Черновик сохраняется у вас в браузере, пока вы не отправите анкету.</p>
     </form>
   );
 }

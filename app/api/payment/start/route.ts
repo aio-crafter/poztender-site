@@ -4,7 +4,7 @@ import {
   createReceipt,
   escapeHtml,
   isPaymentReady,
-  paymentProduct,
+  productForPlan,
   type RobokassaEnvironment,
 } from "../../../../lib/robokassa";
 
@@ -16,19 +16,25 @@ export async function GET(request: Request) {
     return Response.redirect(new URL("/payment/unavailable", request.url), 303);
   }
 
-  const email = new URL(request.url).searchParams.get("email")?.trim().toLowerCase() ?? "";
+  const url = new URL(request.url);
+  const plan = url.searchParams.get("plan") === "subscription" ? "subscription" : "pilot";
+  const product = productForPlan(plan);
+  const errorPath = plan === "subscription" ? "/renew" : "/payment";
+
+  const email = url.searchParams.get("email")?.trim().toLowerCase() ?? "";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
-    return Response.redirect(new URL("/payment?error=email", request.url), 303);
+    return Response.redirect(new URL(`${errorPath}?error=email`, request.url), 303);
   }
 
   const merchantLogin = runtimeEnv.ROBOKASSA_MERCHANT_LOGIN!;
   const invoiceId = createInvoiceId();
-  const receipt = createReceipt();
-  const origin = new URL(request.url).origin;
+  const receipt = createReceipt(product);
+  const origin = url.origin;
   const successUrl = `${origin}/payment/success`;
   const failUrl = `${origin}/payment/failed`;
   const signature = await createPaymentSignature({
     merchantLogin,
+    amount: product.amount,
     invoiceId,
     password: runtimeEnv.ROBOKASSA_PASSWORD_1!,
     receipt,
@@ -38,9 +44,9 @@ export async function GET(request: Request) {
 
   const fields: Record<string, string> = {
     MerchantLogin: merchantLogin,
-    OutSum: paymentProduct.amount,
+    OutSum: product.amount,
     InvId: invoiceId,
-    Description: paymentProduct.description,
+    Description: product.description,
     SignatureValue: signature,
     Receipt: receipt,
     Culture: "ru",

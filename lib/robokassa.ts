@@ -1,4 +1,5 @@
 const PAYMENT_AMOUNT = "4900.00";
+const SUBSCRIPTION_AMOUNT = "7900.00";
 
 export const paymentProduct = {
   amount: PAYMENT_AMOUNT,
@@ -6,6 +7,25 @@ export const paymentProduct = {
   receiptName:
     "Информационно-аналитические услуги: 7-дневная калибровка тендерного радара АПС и СОУЭ",
 } as const;
+
+export const subscriptionProduct = {
+  amount: SUBSCRIPTION_AMOUNT,
+  description: "Ежемесячное обслуживание тендерного радара АПС и СОУЭ",
+  receiptName:
+    "Информационно-аналитические услуги: ежемесячное обслуживание тендерного радара АПС и СОУЭ",
+} as const;
+
+export type PaymentPlan = "pilot" | "subscription";
+
+export function productForPlan(plan: string | null | undefined) {
+  return plan === "subscription" ? subscriptionProduct : paymentProduct;
+}
+
+export function planForAmount(outSum: string): PaymentPlan | null {
+  if (Number(outSum) === Number(paymentProduct.amount)) return "pilot";
+  if (Number(outSum) === Number(subscriptionProduct.amount)) return "subscription";
+  return null;
+}
 
 export interface RobokassaEnvironment {
   ROBOKASSA_MERCHANT_LOGIN?: string;
@@ -36,14 +56,14 @@ export function createInvoiceId() {
   return ((bytes[0] & 0x000fffff) * 0x100000000 + bytes[1] + 1).toString();
 }
 
-export function createReceipt() {
+export function createReceipt(product: { amount: string; receiptName: string }) {
   return encodeURIComponent(
     JSON.stringify({
       items: [
         {
-          name: paymentProduct.receiptName,
+          name: product.receiptName,
           quantity: 1,
-          sum: Number(paymentProduct.amount),
+          sum: Number(product.amount),
           payment_method: "full_prepayment",
           payment_object: "service",
           tax: "none",
@@ -65,6 +85,7 @@ export async function sha256Hex(value: string) {
 
 export async function createPaymentSignature(input: {
   merchantLogin: string;
+  amount: string;
   invoiceId: string;
   password: string;
   receipt: string;
@@ -73,7 +94,7 @@ export async function createPaymentSignature(input: {
 }) {
   const signatureBase = [
     input.merchantLogin,
-    paymentProduct.amount,
+    input.amount,
     input.invoiceId,
     input.receipt,
     input.successUrl,
@@ -114,7 +135,7 @@ export async function isIntakeAccessValid(input: {
 }) {
   if (
     !/^\d{1,19}$/.test(input.invoiceId) ||
-    Number(input.outSum) !== Number(paymentProduct.amount) ||
+    planForAmount(input.outSum) !== "pilot" ||
     !/^\d{10}$/.test(input.expires) ||
     !/^[a-f\d]{64}$/i.test(input.accessToken)
   ) {

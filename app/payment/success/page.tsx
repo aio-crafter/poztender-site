@@ -4,7 +4,7 @@ import {
   createIntakeAccessToken,
   createResultSignature,
   isPaymentReady,
-  paymentProduct,
+  planForAmount,
   safeEqualHex,
   type RobokassaEnvironment,
 } from "../../../lib/robokassa";
@@ -27,12 +27,13 @@ export default async function PaymentSuccessPage({ searchParams }: PaymentSucces
   const outSum = first(parameters.OutSum);
   const receivedSignature = first(parameters.SignatureValue);
   const env = process.env as RobokassaEnvironment;
-  let briefUrl = "";
+  const plan = planForAmount(outSum);
+  let confirmed = false;
 
   if (
     isPaymentReady(env) &&
     /^\d{1,19}$/.test(invoiceId) &&
-    Number(outSum) === Number(paymentProduct.amount) &&
+    plan &&
     /^[a-f\d]{64}$/i.test(receivedSignature)
   ) {
     const expectedSignature = await createResultSignature({
@@ -40,17 +41,36 @@ export default async function PaymentSuccessPage({ searchParams }: PaymentSucces
       invoiceId,
       password: env.ROBOKASSA_PASSWORD_1!,
     });
-    if (safeEqualHex(receivedSignature, expectedSignature)) {
-      const expires = String(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
-      const access = await createIntakeAccessToken({
-        invoiceId,
-        outSum,
-        expires,
-        password: env.ROBOKASSA_PASSWORD_2!,
-      });
-      const query = new URLSearchParams({ InvId: invoiceId, OutSum: outSum, expires, access });
-      briefUrl = `/brief?${query.toString()}`;
-    }
+    confirmed = safeEqualHex(receivedSignature, expectedSignature);
+  }
+
+  if (confirmed && plan === "subscription") {
+    return (
+      <main>
+        <Header />
+        <section className="result-page shell">
+          <span className="result-mark success" aria-hidden="true">✓</span>
+          <p className="eyebrow">Продление подтверждено</p>
+          <h1>Спасибо. Обслуживание продлено ещё на месяц.</h1>
+          <p>Радар продолжит присылать отбор закупок в выбранный ранее канал. Новая анкета не нужна — профиль компании уже настроен.</p>
+          <a className="button button-primary" href="/">Вернуться на главную <span aria-hidden="true">→</span></a>
+        </section>
+        <Footer />
+      </main>
+    );
+  }
+
+  let briefUrl = "";
+  if (confirmed && plan === "pilot") {
+    const expires = String(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
+    const access = await createIntakeAccessToken({
+      invoiceId,
+      outSum,
+      expires,
+      password: env.ROBOKASSA_PASSWORD_2!,
+    });
+    const query = new URLSearchParams({ InvId: invoiceId, OutSum: outSum, expires, access });
+    briefUrl = `/brief?${query.toString()}`;
   }
 
   return (
