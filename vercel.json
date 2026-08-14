@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "relay-vercel/api/telegram-relay.mjs",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/telegram-relay",
+      "dest": "relay-vercel/api/telegram-relay.mjs"
+    }
+  ]
+}
