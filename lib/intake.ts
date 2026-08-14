@@ -20,11 +20,13 @@ type IntakeResult =
   | { ok: false; error: string };
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const TELEGRAM_PATTERN = /^@?[a-zA-Z][a-zA-Z0-9_]{4,31}$/;
+const TELEGRAM_USERNAME_PATTERN = /^@?[a-zA-Z][a-zA-Z0-9_]{4,31}$/;
+const TELEGRAM_PHONE_PATTERN = /^\+?\d[\d\s\-()]{8,17}\d$/;
+const NULL_BYTE = String.fromCharCode(0);
 
 function clean(value: unknown, maxLength: number) {
   return typeof value === "string"
-    ? value.replaceAll("\u0000", "").trim().slice(0, maxLength)
+    ? value.split(NULL_BYTE).join("").trim().slice(0, maxLength)
     : "";
 }
 
@@ -42,7 +44,7 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
   const inn = clean(input.inn, 12).replace(/\s+/g, "");
   const contactName = clean(input.contactName, 100);
   const email = clean(input.email, 160).toLowerCase();
-  const telegramRaw = clean(input.telegram, 33);
+  const telegramRaw = clean(input.telegram, 40);
   const replyChannel = clean(input.replyChannel, 16);
   const regions = clean(input.regions, 500);
   const workTypes = clean(input.workTypes, 1_200);
@@ -66,8 +68,10 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
   if (replyChannel !== "telegram" && replyChannel !== "email") {
     return { ok: false, error: "Выберите способ получения ответа." };
   }
-  if (replyChannel === "telegram" && !TELEGRAM_PATTERN.test(telegramRaw)) {
-    return { ok: false, error: "Укажите Telegram в формате @username." };
+  const telegramIsUsername = TELEGRAM_USERNAME_PATTERN.test(telegramRaw);
+  const telegramIsPhone = TELEGRAM_PHONE_PATTERN.test(telegramRaw);
+  if (replyChannel === "telegram" && !telegramIsUsername && !telegramIsPhone) {
+    return { ok: false, error: "Укажите Telegram в формате @username или номер телефона." };
   }
   if (regions.length < 2) {
     return { ok: false, error: "Укажите регионы поиска." };
@@ -82,9 +86,9 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
     return { ok: false, error: "Нужно подтвердить согласие на обработку данных." };
   }
 
-  const telegram = telegramRaw
+  const telegram = telegramIsUsername
     ? `@${telegramRaw.replace(/^@/, "")}`
-    : "";
+    : telegramRaw;
 
   return {
     ok: true,
