@@ -10,7 +10,7 @@ export function Header() {
           <a href="/#example">Пример</a>
           <a href="/#process">Как работает</a>
           <a href="/#price">Цена</a>
-          <a href="/brief">Анкета</a>
+          <a href="/payment">Оплата и анкета</a>
         </nav>
         <div className="header-actions">
           <a className="header-offer" href="/offer">Оферта</a>
@@ -43,7 +43,7 @@ export function Footer() {
           <a href="https://t.me/kruger79" target="_blank" rel="noreferrer">Telegram: @kruger79</a>
           <a href="/offer">Публичная оферта</a>
           <a href="/privacy">Политика обработки данных</a>
-          <a href="/brief">Анкета для запуска</a>
+          <a href="/payment">Оплата и анкета</a>
         </div>
       </div>
       <div className="shell footer-bottom">
