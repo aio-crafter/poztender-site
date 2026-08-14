@@ -2,6 +2,10 @@ import {
   createIntakeNotification,
   validateIntakeSubmission,
 } from "../../../lib/intake";
+import {
+  isIntakeAccessValid,
+  type RobokassaEnvironment,
+} from "../../../lib/robokassa";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +13,13 @@ interface TelegramEnvironment {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_OWNER_CHAT_ID?: string;
   TELEGRAM_OWNER_USERNAME?: string;
+  TELEGRAM_RELAY_AUTH_TOKEN?: string;
+  TELEGRAM_RELAY_SECRET?: string;
+  TELEGRAM_RELAY_URL?: string;
 }
 
 const rateLimits = new Map<string, number[]>();
+const usedAccessTokens = new Map<string, number>();
 
 async function resolveOwnerChatId(
   token: string,
@@ -49,6 +57,36 @@ async function resolveOwnerChatId(
     return match?.chat?.id ? String(match.chat.id) : "";
   } catch {
     return "";
+  }
+}
+
+async function sendThroughRelay(
+  env: TelegramEnvironment,
+  token: string,
+  text: string,
+) {
+  const relayUrl = env.TELEGRAM_RELAY_URL ?? "";
+  const relaySecret = env.TELEGRAM_RELAY_SECRET ?? "";
+  const relayAuthToken = env.TELEGRAM_RELAY_AUTH_TOKEN ?? "";
+  if (!/^https:\/\/[^\s]+$/.test(relayUrl) || relaySecret.length < 32) return null;
+
+  try {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${relaySecret}`,
+      "content-type": "application/json",
+      "x-telegram-bot-token": token,
+    };
+    if (relayAuthToken) {
+      headers["OAI-Sites-Authorization"] = `Bearer ${relayAuthToken}`;
+    }
+    return await fetch(relayUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(12_000),
+    });
+  } catch {
+    return new Response(null, { status: 502 });
   }
 }
 
@@ -95,6 +133,35 @@ export async function POST(request: Request) {
     return json({ ok: false, error: "Не удалось прочитать анкету." }, 400);
   }
 
+  const paymentEnv = process.env as RobokassaEnvironment;
+  const access = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const invoiceId = typeof access.invoiceId === "string" ? access.invoiceId : "";
+  const outSum = typeof access.outSum === "string" ? access.outSum : "";
+  const accessExpires = typeof access.accessExpires === "string" ? access.accessExpires : "";
+  const accessToken = typeof access.accessToken === "string" ? access.accessToken : "";
+  const paidAccess = Boolean(paymentEnv.ROBOKASSA_PASSWORD_2) && await isIntakeAccessValid({
+    invoiceId,
+    outSum,
+    expires: accessExpires,
+    accessToken,
+    password: paymentEnv.ROBOKASSA_PASSWORD_2 ?? "",
+  });
+  if (!paidAccess) {
+    return json({
+      ok: false,
+      error: "Анкета доступна только по персональной ссылке после подтверждённой оплаты.",
+    }, 402);
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  for (const [key, expires] of usedAccessTokens) {
+    if (expires <= nowSeconds) usedAccessTokens.delete(key);
+  }
+  const accessKey = `${invoiceId}:${accessToken}`;
+  if (usedAccessTokens.has(accessKey)) {
+    return json({ ok: false, error: "Эта оплаченная анкета уже была отправлена." }, 409);
+  }
+
   const validation = validateIntakeSubmission(body);
   if (!validation.ok) {
     return json({ ok: false, error: validation.error }, 400);
@@ -107,6 +174,19 @@ export async function POST(request: Request) {
       ok: false,
       error: "Канал приёма анкет временно настраивается. Данные не отправлены — воспользуйтесь контактом ниже.",
     }, 503);
+  }
+
+  const notification = createIntakeNotification(validation.data);
+  const relayResponse = await sendThroughRelay(env, token, notification);
+  if (relayResponse) {
+    if (relayResponse.ok) {
+      usedAccessTokens.set(accessKey, Number(accessExpires));
+      return json({ ok: true }, 201);
+    }
+    return json({
+      ok: false,
+      error: "Канал уведомлений временно недоступен. Попробуйте ещё раз или воспользуйтесь контактом ниже.",
+    }, 502);
   }
 
   const chatId = await resolveOwnerChatId(
@@ -128,7 +208,7 @@ export async function POST(request: Request) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: createIntakeNotification(validation.data),
+        text: notification,
         parse_mode: "HTML",
         disable_web_page_preview: true,
       }),
@@ -148,5 +228,6 @@ export async function POST(request: Request) {
     }, 502);
   }
 
+  usedAccessTokens.set(accessKey, Number(accessExpires));
   return json({ ok: true }, 201);
 }
