@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 interface RelayEnvironment {
+  TELEGRAM_OWNER_CHAT_ID?: string;
   TELEGRAM_OWNER_USERNAME?: string;
   TELEGRAM_RELAY_SECRET?: string;
 }
@@ -13,6 +14,50 @@ function reply(body: Record<string, unknown>, status: number) {
       "x-content-type-options": "nosniff",
     },
   });
+}
+
+// Prefer an explicitly configured owner chat id. Falling back to scanning
+// getUpdates() is fragile: Telegram only retains a limited backlog of
+// updates, so if the owner has not messaged the bot recently, a paid
+// customer's submission can silently fail to deliver. Always set
+// TELEGRAM_OWNER_CHAT_ID in the hosting panel for reliable delivery.
+async function resolveOwnerChatId(
+  token: string,
+  configuredChatId: string,
+  configuredUsername: string,
+) {
+  if (/^-?\d{5,20}$/.test(configuredChatId)) return configuredChatId;
+
+  const ownerUsername = configuredUsername.replace(/^@/, "").toLowerCase();
+  if (!/^[a-z][a-z0-9_]{4,31}$/.test(ownerUsername)) return "";
+
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${token}/getUpdates?allowed_updates=%5B%22message%22%5D&limit=100`,
+      { cache: "no-store", signal: AbortSignal.timeout(8_000) },
+    );
+    if (!response.ok) return "";
+
+    const payload = (await response.json()) as {
+      result?: Array<{
+        message?: {
+          chat?: { id?: number; type?: string; username?: string };
+          from?: { username?: string };
+        };
+      }>;
+    };
+    const match = (payload.result ?? [])
+      .map((update) => update.message)
+      .filter((message) => message?.chat?.type === "private")
+      .findLast((message) => {
+        const username = message?.chat?.username ?? message?.from?.username ?? "";
+        return username.toLowerCase() === ownerUsername;
+      });
+
+    return match?.chat?.id ? String(match.chat.id) : "";
+  } catch {
+    return "";
+  }
 }
 
 export async function POST(request: Request) {
@@ -37,43 +82,39 @@ export async function POST(request: Request) {
   }
   if (!text) return reply({ ok: false }, 400);
 
-  const ownerUsername = (env.TELEGRAM_OWNER_USERNAME ?? "kruger79")
-    .replace(/^@/, "")
-    .toLowerCase();
-  const updatesResponse = await fetch(
-    `https://api.telegram.org/bot${token}/getUpdates?allowed_updates=%5B%22message%22%5D&limit=100`,
-    { cache: "no-store", signal: AbortSignal.timeout(8_000) },
+  const chatId = await resolveOwnerChatId(
+    token,
+    env.TELEGRAM_OWNER_CHAT_ID ?? "",
+    env.TELEGRAM_OWNER_USERNAME ?? "kruger79",
   );
-  if (!updatesResponse.ok) return reply({ ok: false }, 502);
+  if (!chatId) {
+    console.error(
+      "[telegram-relay] could not resolve owner chat id; set TELEGRAM_OWNER_CHAT_ID to avoid dropping paid submissions",
+    );
+    return reply({ ok: false, needsStart: true }, 503);
+  }
 
-  const updates = (await updatesResponse.json()) as {
-    result?: Array<{
-      message?: {
-        chat?: { id?: number; type?: string; username?: string };
-        from?: { username?: string };
-      };
-    }>;
-  };
-  const ownerMessage = (updates.result ?? [])
-    .map((update) => update.message)
-    .filter((message) => message?.chat?.type === "private")
-    .findLast((message) => {
-      const username = message?.chat?.username ?? message?.from?.username ?? "";
-      return username.toLowerCase() === ownerUsername;
+  let telegramResponse: Response;
+  try {
+    telegramResponse = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
+      signal: AbortSignal.timeout(8_000),
     });
-  const chatId = ownerMessage?.chat?.id;
-  if (!chatId) return reply({ ok: false, needsStart: true }, 503);
+  } catch (error) {
+    console.error("[telegram-relay] sendMessage request threw", error);
+    return reply({ ok: false }, 502);
+  }
 
-  const telegramResponse = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-    }),
-    signal: AbortSignal.timeout(8_000),
-  });
+  if (!telegramResponse.ok) {
+    console.error(`[telegram-relay] sendMessage failed with status ${telegramResponse.status}`);
+  }
+
   return reply({ ok: telegramResponse.ok }, telegramResponse.ok ? 201 : 502);
 }
