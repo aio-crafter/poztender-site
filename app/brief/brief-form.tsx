@@ -4,9 +4,17 @@ import { FormEvent, useState } from "react";
 
 interface BriefFormProps {
   invoiceId?: string;
+  outSum?: string;
+  accessExpires?: string;
+  accessToken?: string;
 }
 
-export function BriefForm({ invoiceId = "" }: BriefFormProps) {
+export function BriefForm({
+  invoiceId = "",
+  outSum = "",
+  accessExpires = "",
+  accessToken = "",
+}: BriefFormProps) {
   const [replyChannel, setReplyChannel] = useState<"telegram" | "email">("telegram");
   const [status, setStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
@@ -60,6 +68,9 @@ export function BriefForm({ invoiceId = "" }: BriefFormProps) {
   return (
     <form className="brief-form" onSubmit={submit} noValidate={false}>
       <input type="hidden" name="invoiceId" value={invoiceId} />
+      <input type="hidden" name="outSum" value={outSum} />
+      <input type="hidden" name="accessExpires" value={accessExpires} />
+      <input type="hidden" name="accessToken" value={accessToken} />
       <div className="honeypot" aria-hidden="true">
         <label>Сайт<input name="website" tabIndex={-1} autoComplete="off" /></label>
       </div>
