@@ -114,17 +114,41 @@ function line(label: string, value: string) {
   return `<b>${label}:</b> ${escapeTelegramHtml(value || "—")}`;
 }
 
-// The invoice number is passed in from the confirmed order rather than taken
-// from the submission: it identifies a real payment, so it must not be
-// something the sender can choose.
-export function createIntakeNotification(data: IntakeSubmission, invoiceId?: string) {
+export interface ReceiptBuyer {
+  buyerType: string;
+  buyerInn: string | null;
+  buyerName: string | null;
+}
+
+// The invoice number and buyer details are passed in from the confirmed order
+// rather than taken from the submission: they describe a real payment, so they
+// must not be something the sender can choose.
+export function createIntakeNotification(
+  data: IntakeSubmission,
+  invoiceId?: string,
+  buyer?: ReceiptBuyer,
+) {
   const reply = data.replyChannel === "telegram"
     ? `Telegram ${data.telegram}`
     : `email ${data.email}`;
 
+  // Robokassa has no field for the buyer's tax details, so a receipt for an
+  // organisation or sole trader has to be issued by hand in «Мой налог».
+  // Carrying the requisites here is what makes that possible at all — see
+  // AUDIT_REPORT.md, section on B2B receipts.
+  const businessReceipt = buyer?.buyerType === "business"
+    ? [
+        "",
+        "<b>⚠️ Чек НПД юрлицу — выставить вручную в «Мой налог»</b>",
+        line("Плательщик", buyer.buyerName ?? ""),
+        line("ИНН плательщика", buyer.buyerInn ?? ""),
+      ]
+    : [];
+
   return [
     "<b>🔥 Новая анкета ПожТендера</b>",
     invoiceId ? line("Номер платежа", invoiceId) : "",
+    ...businessReceipt,
     line("Компания", data.company),
     line("ИНН", data.inn),
     line("Контакт", data.contactName),

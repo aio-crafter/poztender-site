@@ -1,4 +1,5 @@
 import { isDatabaseConfigured } from "../../../../db";
+import { validateBuyer } from "../../../../lib/buyer";
 import { createPendingOrder } from "../../../../lib/orders";
 import {
   buildSetCookie,
@@ -23,24 +24,31 @@ function readPlan(value: string | null): PaymentPlan {
   return value === "subscription" ? "subscription" : "pilot";
 }
 
-async function readSubmission(request: Request) {
-  const url = new URL(request.url);
+const SUBMISSION_FIELDS = ["plan", "email", "buyerType", "buyerInn", "buyerName"] as const;
+type Submission = Record<(typeof SUBMISSION_FIELDS)[number], string | null>;
+
+async function readSubmission(request: Request): Promise<Submission> {
+  const empty = Object.fromEntries(SUBMISSION_FIELDS.map((name) => [name, null])) as Submission;
+
   if (request.method === "GET") {
-    return { plan: url.searchParams.get("plan"), email: url.searchParams.get("email") };
+    const { searchParams } = new URL(request.url);
+    return Object.fromEntries(
+      SUBMISSION_FIELDS.map((name) => [name, searchParams.get(name)]),
+    ) as Submission;
   }
 
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("form-data")) {
     const form = await request.formData();
-    const plan = form.get("plan");
-    const email = form.get("email");
-    return {
-      plan: typeof plan === "string" ? plan : null,
-      email: typeof email === "string" ? email : null,
-    };
+    return Object.fromEntries(
+      SUBMISSION_FIELDS.map((name) => {
+        const value = form.get(name);
+        return [name, typeof value === "string" ? value : null];
+      }),
+    ) as Submission;
   }
 
-  return { plan: null, email: null };
+  return empty;
 }
 
 // Starting a checkout now writes a row, so the endpoint needs a ceiling that
@@ -95,6 +103,14 @@ async function handleStart(request: Request) {
     return Response.redirect(new URL(`${errorPath}?error=email`, request.url), 303);
   }
 
+  // Server-side and authoritative. The browser decides nothing here: a missing
+  // or tampered buyer type can only fall back to "individual", which is the
+  // case that carries no tax details at all.
+  const buyerCheck = validateBuyer(submission);
+  if (!buyerCheck.ok) {
+    return Response.redirect(new URL(`${errorPath}?error=${buyerCheck.error}`, request.url), 303);
+  }
+
   // The price is looked up from the plan identifier here and written to the
   // order before anything is signed. Nothing the browser sent can reach it.
   const product = productForPlan(plan);
@@ -111,6 +127,7 @@ async function handleStart(request: Request) {
       plan,
       email,
       sessionHash: await hashSessionSecret(sessionSecret),
+      buyer: buyerCheck.buyer,
     });
   } catch (error) {
     console.error("[payment] could not create order", error instanceof Error ? error.message : error);

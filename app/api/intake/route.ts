@@ -192,6 +192,11 @@ export async function POST(request: Request) {
   const notification = createIntakeNotification(
     submission,
     String(state.order.invoiceId),
+    {
+      buyerType: state.order.buyerType,
+      buyerInn: state.order.buyerInn,
+      buyerName: state.order.buyerName,
+    },
   );
 
   // Spending the grant only after delivery succeeds keeps a transient Telegram

@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
+  check,
   index,
   integer,
   numeric,
@@ -31,6 +33,11 @@ export const orders = pgTable(
     // never against anything supplied by the browser.
     expectedAmount: numeric("expected_amount", { precision: 12, scale: 2 }).notNull(),
     email: text("email").notNull(),
+    // 'individual' | 'business'. A business buyer is an organisation or a sole
+    // trader, and a receipt issued to one has to name the buyer and its INN.
+    buyerType: text("buyer_type").notNull().default("individual"),
+    buyerInn: text("buyer_inn"),
+    buyerName: text("buyer_name"),
     // 'pending' | 'paid'. There is no 'failed' state: Robokassa simply never
     // sends a ResultURL for an abandoned payment, so an unpaid order stays
     // pending and is meaningless rather than wrong.
@@ -41,7 +48,20 @@ export const orders = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     paidAt: timestamp("paid_at", { withTimezone: true }),
   },
-  (table) => [index("orders_session_hash_idx").on(table.sessionHash)],
+  (table) => [
+    index("orders_session_hash_idx").on(table.sessionHash),
+    // The pairing is enforced by the database, not only by the validator: a
+    // business order without requisites cannot exist, and an individual order
+    // cannot carry stray tax details.
+    check(
+      "orders_buyer_requisites",
+      sql`(
+        (${table.buyerType} = 'individual' AND ${table.buyerInn} IS NULL AND ${table.buyerName} IS NULL)
+        OR
+        (${table.buyerType} = 'business' AND ${table.buyerInn} IS NOT NULL AND ${table.buyerName} IS NOT NULL)
+      )`,
+    ),
+  ],
 );
 
 /**

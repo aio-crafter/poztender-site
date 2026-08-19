@@ -549,6 +549,143 @@ test("checkout stays closed when no order store is configured", async () => {
   }
 });
 
+// --- buyer type and receipt requisites ------------------------------------
+
+// A real INN carries a checksum, so these are computed rather than invented.
+const ORG_INN = "7707083893"; // 10 digits, valid control digit
+const SOLE_TRADER_INN = "500100732259"; // 12 digits, valid control digits
+
+test("an individual buyer needs no tax details and stores none", async () => {
+  await startCheckout("email=buyer%40example.ru&buyerType=individual");
+  const [order] = await orderRows();
+  assert.equal(order.buyer_type, "individual");
+  assert.equal(order.buyer_inn, null);
+  assert.equal(order.buyer_name, null);
+});
+
+test("an omitted buyer type falls back to individual", async () => {
+  await startCheckout("email=buyer%40example.ru");
+  const [order] = await orderRows();
+  assert.equal(order.buyer_type, "individual");
+});
+
+test("an organisation buyer stores its name and INN", async () => {
+  await startCheckout(
+    `email=buyer%40example.ru&buyerType=business&buyerInn=${ORG_INN}` +
+      "&buyerName=%D0%9E%D0%9E%D0%9E%20%C2%AB%D0%A0%D0%BE%D0%BC%D0%B0%D1%88%D0%BA%D0%B0%C2%BB",
+  );
+  const [order] = await orderRows();
+  assert.equal(order.buyer_type, "business");
+  assert.equal(order.buyer_inn, ORG_INN);
+  assert.equal(order.buyer_name, "ООО «Ромашка»");
+});
+
+test("a sole trader buyer with a 12-digit INN is accepted", async () => {
+  await startCheckout(
+    `email=ip%40example.ru&buyerType=business&buyerInn=${SOLE_TRADER_INN}` +
+      "&buyerName=%D0%98%D0%9F%20%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2",
+  );
+  const [order] = await orderRows();
+  assert.equal(order.buyer_type, "business");
+  assert.equal(order.buyer_inn, SOLE_TRADER_INN);
+  assert.equal(order.buyer_name, "ИП Иванов");
+});
+
+test("a business buyer without an INN is refused and no order is created", async () => {
+  const response = await request(
+    "/api/payment/start?email=b%40example.ru&buyerType=business&buyerName=%D0%9E%D0%9E%D0%9E",
+  );
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), `${ORIGIN}/payment?error=inn`);
+  assert.equal((await orderRows()).length, 0);
+});
+
+test("a business buyer without a name is refused", async () => {
+  const response = await request(
+    `/api/payment/start?email=b%40example.ru&buyerType=business&buyerInn=${ORG_INN}`,
+  );
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), `${ORIGIN}/payment?error=name`);
+  assert.equal((await orderRows()).length, 0);
+});
+
+test("a malformed INN is refused, including one with a wrong checksum", async () => {
+  const rejected = [
+    "123", // too short
+    "12345678901", // 11 digits, neither length
+    "0000000000", // right length, wrong control digit
+    "7707083894", // one digit off a real INN
+    "500100732258", // 12 digits, wrong second control digit
+    "77070838aa", // not digits
+    "770708389%20", // trailing space
+  ];
+  for (const inn of rejected) {
+    await testDb.reset();
+    const response = await request(
+      `/api/payment/start?email=b%40example.ru&buyerType=business&buyerInn=${inn}` +
+        "&buyerName=%D0%9E%D0%9E%D0%9E",
+    );
+    assert.equal(response.headers.get("location"), `${ORIGIN}/payment?error=inn`, inn);
+    assert.equal((await orderRows()).length, 0, inn);
+  }
+});
+
+test("a tampered buyer type can only downgrade to individual, never skip requisites", async () => {
+  // Anything that is not the literal "business" is an individual buyer, so
+  // spoofing the field cannot produce a business order without tax details.
+  for (const spoof of ["BUSINESS", "Business", "company", "1", "true", "', 'x"]) {
+    await testDb.reset();
+    const { fields } = await startCheckout(
+      `email=b%40example.ru&buyerType=${encodeURIComponent(spoof)}`,
+    );
+    assert.ok(fields.InvId, spoof);
+    const [order] = await orderRows();
+    assert.equal(order.buyer_type, "individual", spoof);
+    assert.equal(order.buyer_inn, null, spoof);
+  }
+});
+
+test("the database refuses a business order with no requisites", async () => {
+  // The pairing is a data constraint, not only a validator rule.
+  await assert.rejects(
+    () =>
+      testDb.db.query(
+        `INSERT INTO orders (invoice_id, plan, expected_amount, email, session_hash, buyer_type)
+         VALUES (424242, 'pilot', 4900.00, 'x@example.ru', 'hash', 'business')`,
+      ),
+    /orders_buyer_requisites|check constraint/i,
+  );
+
+  // …and an individual order carrying stray tax details.
+  await assert.rejects(
+    () =>
+      testDb.db.query(
+        `INSERT INTO orders (invoice_id, plan, expected_amount, email, session_hash, buyer_type, buyer_inn, buyer_name)
+         VALUES (424243, 'pilot', 4900.00, 'x@example.ru', 'hash', 'individual', '7707083893', 'ООО')`,
+      ),
+    /orders_buyer_requisites|check constraint/i,
+  );
+});
+
+test("the receipt describes the service being sold", async () => {
+  const { fields } = await startCheckout();
+  const receipt = JSON.parse(decodeURIComponent(fields.Receipt));
+
+  assert.equal(receipt.items.length, 1);
+  const [item] = receipt.items;
+  assert.match(item.name, /калибровк/i, "the line item must name the service");
+  assert.ok(item.name.length <= 128);
+  assert.equal(item.quantity, 1);
+  assert.equal(item.sum, 4900);
+  // Unchanged on purpose: a self-employed seller charges no VAT, and these
+  // values were verified working end-to-end in test mode.
+  assert.equal(item.tax, "none");
+  assert.equal(item.payment_method, "full_prepayment");
+  assert.equal(item.payment_object, "service");
+  // The receipt total must equal what Robokassa is asked to charge.
+  assert.equal(item.sum, Number(fields.OutSum));
+});
+
 // --- security retest: multi-order browsers --------------------------------
 
 test("restarting checkout keeps the session, so paying the first attempt still grants access", async () => {

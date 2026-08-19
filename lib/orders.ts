@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { accessGrants, orders, type AccessGrant, type Order } from "../db/schema";
+import type { BuyerDetails } from "./buyer";
 import { createInvoiceId, productForPlan, type PaymentPlan } from "./robokassa";
 
 // How long a confirmed payment entitles the customer, measured from the
@@ -27,6 +28,7 @@ export async function createPendingOrder(input: {
   plan: PaymentPlan;
   email: string;
   sessionHash: string;
+  buyer: BuyerDetails;
 }): Promise<Order> {
   const db = getDb();
   const product = productForPlan(input.plan);
@@ -44,6 +46,9 @@ export async function createPendingOrder(input: {
           email: input.email,
           status: "pending",
           sessionHash: input.sessionHash,
+          buyerType: input.buyer.buyerType,
+          buyerInn: input.buyer.buyerInn,
+          buyerName: input.buyer.buyerName,
         })
         .returning();
       return order;
