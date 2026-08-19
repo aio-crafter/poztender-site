@@ -21,9 +21,21 @@ export function productForPlan(plan: string | null | undefined) {
   return plan === "subscription" ? subscriptionProduct : paymentProduct;
 }
 
+// Robokassa documents OutSum as a decimal string with a dot separator, but the
+// number of fractional digits is not fixed: checkout sends "4900.00" while
+// notifications arrive with two decimals in test mode and six in live mode
+// ("4900.000000"). So the amount must be compared numerically, never as a
+// string. The pattern runs first because bare Number() also accepts forms
+// Robokassa never sends — " 4900", "+4900", "4.9e3", "0x1324" — and those must
+// not be able to masquerade as a known tariff.
+const OUT_SUM_PATTERN = /^\d{1,10}(?:\.\d{1,6})?$/;
+
 export function planForAmount(outSum: string): PaymentPlan | null {
-  if (Number(outSum) === Number(paymentProduct.amount)) return "pilot";
-  if (Number(outSum) === Number(subscriptionProduct.amount)) return "subscription";
+  if (typeof outSum !== "string" || !OUT_SUM_PATTERN.test(outSum)) return null;
+
+  const amount = Number(outSum);
+  if (amount === Number(paymentProduct.amount)) return "pilot";
+  if (amount === Number(subscriptionProduct.amount)) return "subscription";
   return null;
 }
 
@@ -35,17 +47,67 @@ export interface RobokassaEnvironment {
   ROBOKASSA_B2B_RECEIPT_CONFIRMED?: string;
 }
 
-export function isPaymentReady(env: RobokassaEnvironment) {
-  const isTestPayment = env.ROBOKASSA_TEST_MODE === "true";
-  const isLiveReceiptConfirmed =
-    env.ROBOKASSA_B2B_RECEIPT_CONFIRMED === "true";
+export type PaymentMode = "test" | "live";
 
-  return Boolean(
-    env.ROBOKASSA_MERCHANT_LOGIN &&
-      env.ROBOKASSA_PASSWORD_1 &&
-      env.ROBOKASSA_PASSWORD_2 &&
-      (isTestPayment || isLiveReceiptConfirmed),
-  );
+/**
+ * Why the payment channel is closed. Every value is a fixed identifier that
+ * names the misconfigured variable — never its value — so it is safe to log.
+ */
+export type PaymentModeBlockReason =
+  | "missing-credentials"
+  | "ambiguous-ROBOKASSA_TEST_MODE"
+  | "ambiguous-ROBOKASSA_B2B_RECEIPT_CONFIRMED"
+  | "live-blocked-until-receipt-confirmed";
+
+export type PaymentModeResult =
+  | { mode: PaymentMode; reason: null }
+  | { mode: null; reason: PaymentModeBlockReason };
+
+// Only the exact strings "true" and "false" count. Anything else — unset,
+// "True", "TRUE", "1", "yes", a stray trailing space — is ambiguous. Treating
+// ambiguity as `false` is what made a typo in ROBOKASSA_TEST_MODE silently
+// select live mode and charge real cards, so ambiguity must fail closed.
+function readStrictFlag(value: string | undefined) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+/**
+ * Resolves which Robokassa mode the current environment authorises, or refuses
+ * to pick one. Live mode requires two independent, explicit confirmations:
+ * ROBOKASSA_TEST_MODE=false *and* ROBOKASSA_B2B_RECEIPT_CONFIRMED=true. Test
+ * mode requires ROBOKASSA_TEST_MODE=true. There is deliberately no path that
+ * reaches live mode by omission.
+ */
+export function resolvePaymentMode(env: RobokassaEnvironment): PaymentModeResult {
+  if (
+    !env.ROBOKASSA_MERCHANT_LOGIN ||
+    !env.ROBOKASSA_PASSWORD_1 ||
+    !env.ROBOKASSA_PASSWORD_2
+  ) {
+    return { mode: null, reason: "missing-credentials" };
+  }
+
+  const testMode = readStrictFlag(env.ROBOKASSA_TEST_MODE);
+  if (testMode === null) {
+    return { mode: null, reason: "ambiguous-ROBOKASSA_TEST_MODE" };
+  }
+  if (testMode) return { mode: "test", reason: null };
+
+  const receiptConfirmed = readStrictFlag(env.ROBOKASSA_B2B_RECEIPT_CONFIRMED);
+  if (receiptConfirmed === null) {
+    return { mode: null, reason: "ambiguous-ROBOKASSA_B2B_RECEIPT_CONFIRMED" };
+  }
+  if (!receiptConfirmed) {
+    return { mode: null, reason: "live-blocked-until-receipt-confirmed" };
+  }
+
+  return { mode: "live", reason: null };
+}
+
+export function isPaymentReady(env: RobokassaEnvironment) {
+  return resolvePaymentMode(env).mode !== null;
 }
 
 export function createInvoiceId() {
@@ -115,40 +177,11 @@ export async function createResultSignature(input: {
   return sha256Hex(`${input.outSum}:${input.invoiceId}:${input.password}`);
 }
 
-export async function createIntakeAccessToken(input: {
-  invoiceId: string;
-  outSum: string;
-  expires: string;
-  password: string;
-}) {
-  return sha256Hex(
-    `poztender-intake:${input.invoiceId}:${input.outSum}:${input.expires}:${input.password}`,
-  );
-}
-
-export async function isIntakeAccessValid(input: {
-  invoiceId: string;
-  outSum: string;
-  expires: string;
-  accessToken: string;
-  password: string;
-}) {
-  if (
-    !/^\d{1,19}$/.test(input.invoiceId) ||
-    planForAmount(input.outSum) !== "pilot" ||
-    !/^\d{10}$/.test(input.expires) ||
-    !/^[a-f\d]{64}$/i.test(input.accessToken)
-  ) {
-    return false;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const expires = Number(input.expires);
-  if (expires <= now || expires > now + 7 * 24 * 60 * 60 + 300) return false;
-
-  const expected = await createIntakeAccessToken(input);
-  return safeEqualHex(input.accessToken, expected);
-}
+// NOTE: intake access used to be a stateless hash derived from InvId, OutSum
+// and an expiry, recomputed on every request. That made a paid SuccessURL
+// replayable forever — each visit minted a fresh window — and the link was
+// transferable to anyone. Access now lives in `access_grants`, created once
+// inside the ResultURL transaction. See lib/orders.ts.
 
 export function safeEqualHex(left: string, right: string) {
   const a = left.toLowerCase();

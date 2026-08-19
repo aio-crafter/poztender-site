@@ -18,7 +18,7 @@ function first(value: string | string[] | undefined) {
 
 export default async function PaymentPage({ searchParams }: PaymentPageProps) {
   const parameters = await searchParams;
-  const hasEmailError = first(parameters.error) === "email";
+  const error = first(parameters.error);
 
   return (
     <main>
@@ -43,12 +43,22 @@ export default async function PaymentPage({ searchParams }: PaymentPageProps) {
           <span className="price-name">К оплате</span>
           <div className="price">4 900 <small>₽</small></div>
           <p>Без НДС в связи с применением НПД.</p>
-          {hasEmailError && (
+          {error === "email" && (
             <p className="checkout-error" role="alert">
               Не удалось распознать email. Проверьте адрес и попробуйте ещё раз.
             </p>
           )}
-          <form className="checkout-form" action="/api/payment/start" method="get">
+          {error === "rate" && (
+            <p className="checkout-error" role="alert">
+              Слишком много попыток оплаты подряд. Подождите несколько минут и попробуйте ещё раз.
+            </p>
+          )}
+          {error === "store" && (
+            <p className="checkout-error" role="alert">
+              Не удалось начать оплату — заказ не был сохранён. Деньги не списаны. Повторите попытку через минуту или запросите счёт.
+            </p>
+          )}
+          <form className="checkout-form" action="/api/payment/start" method="post">
             <label>
               Email для уведомления о платеже
               <input name="email" type="email" required maxLength={160} autoComplete="email" placeholder="name@company.ru" />

@@ -1,50 +1,54 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Footer, Header } from "../../site-chrome";
+import { isDatabaseConfigured } from "../../../db";
+import { findOrderBySessionHash, isGrantActive } from "../../../lib/orders";
 import {
-  createIntakeAccessToken,
-  createResultSignature,
-  isPaymentReady,
-  planForAmount,
-  safeEqualHex,
-  type RobokassaEnvironment,
-} from "../../../lib/robokassa";
+  CHECKOUT_COOKIE,
+  hashSessionSecret,
+  isWellFormedSecret,
+} from "../../../lib/payment-session";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Оплата принята — ПожТендер" };
 
-interface PaymentSuccessPageProps {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
+type View = "paid-pilot" | "paid-subscription" | "pending" | "unknown";
 
-function first(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
-}
+/**
+ * Read-only. This page proves nothing and creates nothing: no order status is
+ * changed, no entitlement is issued and no token is minted. It resolves the
+ * browser's checkout cookie to an order and reports what the server already
+ * knows. The only thing that can mark an order paid is the ResultURL handler.
+ *
+ * The query parameters Robokassa appends here are deliberately ignored — they
+ * are attacker-controlled, and treating them as evidence is what previously
+ * allowed a single paid link to be replayed indefinitely.
+ */
+async function resolveView(): Promise<View> {
+  if (!isDatabaseConfigured()) return "unknown";
 
-export default async function PaymentSuccessPage({ searchParams }: PaymentSuccessPageProps) {
-  const parameters = await searchParams;
-  const invoiceId = first(parameters.InvId);
-  const outSum = first(parameters.OutSum);
-  const receivedSignature = first(parameters.SignatureValue);
-  const env = process.env as RobokassaEnvironment;
-  const plan = planForAmount(outSum);
-  let confirmed = false;
+  const secret = (await cookies()).get(CHECKOUT_COOKIE)?.value;
+  if (!isWellFormedSecret(secret)) return "unknown";
 
-  if (
-    isPaymentReady(env) &&
-    /^\d{1,19}$/.test(invoiceId) &&
-    plan &&
-    /^[a-f\d]{64}$/i.test(receivedSignature)
-  ) {
-    const expectedSignature = await createResultSignature({
-      outSum,
-      invoiceId,
-      password: env.ROBOKASSA_PASSWORD_1!,
-    });
-    confirmed = safeEqualHex(receivedSignature, expectedSignature);
+  let state;
+  try {
+    state = await findOrderBySessionHash(await hashSessionSecret(secret));
+  } catch (error) {
+    console.error("[payment] success lookup failed", error instanceof Error ? error.message : error);
+    return "unknown";
   }
+  if (!state) return "unknown";
 
-  if (confirmed && plan === "subscription") {
+  if (state.order.status !== "paid") return "pending";
+  if (state.order.plan === "subscription") return "paid-subscription";
+  return isGrantActive(state.grant, state.order) ? "paid-pilot" : "pending";
+}
+
+export default async function PaymentSuccessPage() {
+  const view = await resolveView();
+
+  if (view === "paid-subscription") {
     return (
       <main>
         <Header />
@@ -60,30 +64,48 @@ export default async function PaymentSuccessPage({ searchParams }: PaymentSucces
     );
   }
 
-  let briefUrl = "";
-  if (confirmed && plan === "pilot") {
-    const expires = String(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
-    const access = await createIntakeAccessToken({
-      invoiceId,
-      outSum,
-      expires,
-      password: env.ROBOKASSA_PASSWORD_2!,
-    });
-    const query = new URLSearchParams({ InvId: invoiceId, OutSum: outSum, expires, access });
-    briefUrl = `/brief?${query.toString()}`;
+  if (view === "paid-pilot") {
+    return (
+      <main>
+        <Header />
+        <section className="result-page shell">
+          <span className="result-mark success" aria-hidden="true">✓</span>
+          <p className="eyebrow">Платёж подтверждён</p>
+          <h1>Спасибо. Следующий шаг — профиль радара.</h1>
+          <p>Для старта заполните одну короткую анкету и выберите, куда получать ответы: в Telegram или на email. Анкета доступна в этом браузере 7 дней.</p>
+          <a className="button button-primary" href="/brief">Заполнить профиль радара <span aria-hidden="true">→</span></a>
+        </section>
+        <Footer />
+      </main>
+    );
+  }
+
+  if (view === "pending") {
+    return (
+      <main>
+        <Header />
+        <section className="result-page shell">
+          <span className="result-mark pending" aria-hidden="true">…</span>
+          <p className="eyebrow">Платёж обрабатывается</p>
+          <h1>Ждём подтверждение от банка.</h1>
+          <p>Обычно это занимает несколько секунд. Обновите страницу через минуту — как только Robokassa подтвердит оплату, здесь появится ссылка на анкету.</p>
+          <a className="button button-primary" href="/payment/success">Обновить <span aria-hidden="true">→</span></a>
+          <p className="microcopy">Если деньги списаны, но подтверждение не появляется дольше 15 минут, напишите нам: <a href="https://t.me/kruger79" target="_blank" rel="noreferrer">@kruger79</a> или <a href="mailto:beastsahsa@yandex.ru">beastsahsa@yandex.ru</a> — проверим платёж вручную.</p>
+        </section>
+        <Footer />
+      </main>
+    );
   }
 
   return (
     <main>
       <Header />
       <section className="result-page shell">
-        <span className={`result-mark ${briefUrl ? "success" : "failed"}`} aria-hidden="true">{briefUrl ? "✓" : "!"}</span>
-        <p className="eyebrow">{briefUrl ? "Платёж подтверждён" : "Подтверждение не получено"}</p>
-        <h1>{briefUrl ? "Спасибо. Следующий шаг — профиль радара." : "Анкета пока закрыта."}</h1>
-        <p>{briefUrl
-          ? "Для старта заполните одну короткую анкету и выберите, куда получать ответы: в Telegram или на email. Ссылка действует 7 дней."
-          : "Откройте эту страницу через кнопку возврата после успешной оплаты Robokassa. Если деньги списаны, но подтверждение не появилось, напишите нам — проверим платёж вручную."}</p>
-        <a className="button button-primary" href={briefUrl || "/payment"}>{briefUrl ? "Заполнить профиль радара" : "Вернуться к оплате"} <span aria-hidden="true">→</span></a>
+        <span className="result-mark failed" aria-hidden="true">!</span>
+        <p className="eyebrow">Подтверждение не получено</p>
+        <h1>Анкета пока закрыта.</h1>
+        <p>Откройте эту страницу в том же браузере, из которого начинали оплату — иначе мы не сможем связать её с вашим заказом. Если деньги списаны, а подтверждение не появилось, напишите нам — проверим платёж вручную.</p>
+        <a className="button button-primary" href="/payment">Вернуться к оплате <span aria-hidden="true">→</span></a>
       </section>
       <Footer />
     </main>

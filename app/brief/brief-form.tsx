@@ -2,13 +2,6 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-interface BriefFormProps {
-  invoiceId?: string;
-  outSum?: string;
-  accessExpires?: string;
-  accessToken?: string;
-}
-
 const DRAFT_KEY = "poztender-brief-draft";
 const DRAFT_TEXT_FIELDS = [
   "company",
@@ -29,12 +22,19 @@ const COUNTED_FIELDS: Record<string, number> = {
   exclusions: 1200,
 };
 
-export function BriefForm({
-  invoiceId = "",
-  outSum = "",
-  accessExpires = "",
-  accessToken = "",
-}: BriefFormProps) {
+// `namedItem` can also return a RadioNodeList or a plain Element, neither of
+// which carries `.value`. Narrowing by instance keeps the value access honest
+// instead of asserting a type the DOM does not guarantee.
+function valueField(form: HTMLFormElement, name: string) {
+  const element = form.elements.namedItem(name);
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+    ? element
+    : null;
+}
+
+// Paid access is proved by the HttpOnly checkout cookie the browser sends
+// automatically, so the form no longer carries any access parameters.
+export function BriefForm() {
   const [replyChannel, setReplyChannel] = useState<"telegram" | "email">("telegram");
   const [status, setStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
@@ -55,9 +55,9 @@ export function BriefForm({
       for (const field of DRAFT_TEXT_FIELDS) {
         const value = draft[field];
         if (!value) continue;
-        const element = form.elements.namedItem(field);
-        if (element && "value" in element) {
-          (element as HTMLInputElement | HTMLTextAreaElement).value = value;
+        const element = valueField(form, field);
+        if (element) {
+          element.value = value;
           restored = true;
         }
       }
@@ -70,10 +70,8 @@ export function BriefForm({
         setDraftRestored(true);
         const counters: Record<string, number> = {};
         for (const field of Object.keys(COUNTED_FIELDS)) {
-          const element = form.elements.namedItem(field);
-          if (element && "value" in element) {
-            counters[field] = (element as HTMLTextAreaElement).value.length;
-          }
+          const element = valueField(form, field);
+          if (element) counters[field] = element.value.length;
         }
         setLengths(counters);
       }
@@ -104,10 +102,8 @@ export function BriefForm({
 
     const counters: Record<string, number> = {};
     for (const field of Object.keys(COUNTED_FIELDS)) {
-      const element = form.elements.namedItem(field);
-      if (element && "value" in element) {
-        counters[field] = (element as HTMLTextAreaElement).value.length;
-      }
+      const element = valueField(form, field);
+      if (element) counters[field] = element.value.length;
     }
     setLengths((current) => ({ ...current, ...counters }));
     saveDraft();
@@ -178,10 +174,6 @@ export function BriefForm({
 
   return (
     <form className="brief-form" ref={formRef} onSubmit={submit} onChange={handleFormChange} noValidate={false}>
-      <input type="hidden" name="invoiceId" value={invoiceId} />
-      <input type="hidden" name="outSum" value={outSum} />
-      <input type="hidden" name="accessExpires" value={accessExpires} />
-      <input type="hidden" name="accessToken" value={accessToken} />
       <div className="honeypot" aria-hidden="true">
         <label>Сайт<input name="website" tabIndex={-1} autoComplete="off" /></label>
       </div>

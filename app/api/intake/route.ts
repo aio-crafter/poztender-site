@@ -1,11 +1,13 @@
+import { isDatabaseConfigured } from "../../../db";
 import {
   createIntakeNotification,
   validateIntakeSubmission,
 } from "../../../lib/intake";
+import { claimGrant, findOrderBySessionHash, isGrantActive } from "../../../lib/orders";
 import {
-  isIntakeAccessValid,
-  type RobokassaEnvironment,
-} from "../../../lib/robokassa";
+  hashSessionSecret,
+  readSessionSecret,
+} from "../../../lib/payment-session";
 import {
   sendIntakeConfirmationEmail,
   type EmailEnvironment,
@@ -23,7 +25,6 @@ interface TelegramEnvironment {
 }
 
 const rateLimits = new Map<string, number[]>();
-const usedAccessTokens = new Map<string, number>();
 
 // Prefer an explicitly configured owner chat id. Falling back to scanning
 // getUpdates() is fragile: Telegram only retains a limited backlog of
@@ -143,32 +144,30 @@ export async function POST(request: Request) {
     return json({ ok: false, error: "Не удалось прочитать анкету." }, 400);
   }
 
-  const paymentEnv = process.env as RobokassaEnvironment;
-  const access = body && typeof body === "object" ? body as Record<string, unknown> : {};
-  const invoiceId = typeof access.invoiceId === "string" ? access.invoiceId : "";
-  const outSum = typeof access.outSum === "string" ? access.outSum : "";
-  const accessExpires = typeof access.accessExpires === "string" ? access.accessExpires : "";
-  const accessToken = typeof access.accessToken === "string" ? access.accessToken : "";
-  const paidAccess = Boolean(paymentEnv.ROBOKASSA_PASSWORD_2) && await isIntakeAccessValid({
-    invoiceId,
-    outSum,
-    expires: accessExpires,
-    accessToken,
-    password: paymentEnv.ROBOKASSA_PASSWORD_2 ?? "",
-  });
-  if (!paidAccess) {
-    return json({
-      ok: false,
-      error: "Анкета доступна только по персональной ссылке после подтверждённой оплаты.",
-    }, 402);
+  // Paid access comes from the HttpOnly checkout cookie plus server state.
+  // Nothing in the request body contributes to the decision.
+  const unpaid = json({
+    ok: false,
+    error: "Анкета доступна только после подтверждённой оплаты, в том же браузере.",
+  }, 402);
+
+  if (!isDatabaseConfigured()) return unpaid;
+
+  const secret = readSessionSecret(request.headers.get("cookie"));
+  if (!secret) return unpaid;
+
+  let state;
+  try {
+    state = await findOrderBySessionHash(await hashSessionSecret(secret));
+  } catch (error) {
+    console.error("[intake] access lookup failed", error instanceof Error ? error.message : error);
+    return json({ ok: false, error: "Сервис временно недоступен. Попробуйте ещё раз." }, 503);
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  for (const [key, expires] of usedAccessTokens) {
-    if (expires <= nowSeconds) usedAccessTokens.delete(key);
+  if (!state || state.order.plan !== "pilot" || !isGrantActive(state.grant, state.order)) {
+    return unpaid;
   }
-  const accessKey = `${invoiceId}:${accessToken}`;
-  if (usedAccessTokens.has(accessKey)) {
+  if (state.grant!.usedAt) {
     return json({ ok: false, error: "Эта оплаченная анкета уже была отправлена." }, 409);
   }
 
@@ -176,6 +175,9 @@ export async function POST(request: Request) {
   if (!validation.ok) {
     return json({ ok: false, error: validation.error }, 400);
   }
+  // Held in its own binding: TypeScript loses the `ok: true` narrowing inside
+  // the closure below, and this keeps the value correctly typed there.
+  const submission = validation.data;
 
   const env = process.env as TelegramEnvironment;
   const token = env.TELEGRAM_BOT_TOKEN ?? "";
@@ -187,14 +189,22 @@ export async function POST(request: Request) {
     }, 503);
   }
 
-  const notification = createIntakeNotification(validation.data);
+  const notification = createIntakeNotification(
+    submission,
+    String(state.order.invoiceId),
+  );
+
+  // Spending the grant only after delivery succeeds keeps a transient Telegram
+  // failure from burning a paid customer's single submission. The conditional
+  // UPDATE inside claimGrant makes the write itself safe to race.
+  const grantId = state.grant!.id;
 
   async function notifyByEmail() {
     try {
       await sendIntakeConfirmationEmail(process.env as EmailEnvironment, {
-        to: validation.data.email,
-        company: validation.data.company,
-        contactName: validation.data.contactName,
+        to: submission.email,
+        company: submission.company,
+        contactName: submission.contactName,
       });
     } catch (error) {
       console.error("[intake] confirmation email threw", error);
@@ -208,7 +218,7 @@ export async function POST(request: Request) {
   // though a direct send might have succeeded.
   const relayResponse = await sendThroughRelay(env, token, notification);
   if (relayResponse?.ok) {
-    usedAccessTokens.set(accessKey, Number(accessExpires));
+    await claimGrant(grantId);
     await notifyByEmail();
     return json({ ok: true }, 201);
   }
@@ -262,7 +272,7 @@ export async function POST(request: Request) {
     }, 502);
   }
 
-  usedAccessTokens.set(accessKey, Number(accessExpires));
+  await claimGrant(grantId);
   await notifyByEmail();
   return json({ ok: true }, 201);
 }

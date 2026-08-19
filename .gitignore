@@ -43,3 +43,6 @@ yarn-error.log*
 # local development helper and logs
 /dev-run.cmd
 /work-dev.*.log
+
+# typescript incremental build info
+tsconfig.tsbuildinfo

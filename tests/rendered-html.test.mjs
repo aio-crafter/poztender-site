@@ -58,24 +58,26 @@ test("renders payment pages and keeps checkout unavailable without secrets", asy
   assert.match(await unavailable.text(), /Онлайн-оплата подключается/);
 });
 
-test("renders the single intake form with a reply channel choice", async () => {
+test("keeps the intake form closed for a bare invoice number", async () => {
+  // An invoice number on its own is not proof of payment: the form only opens
+  // for a link carrying a signed access token. The paid path is covered in
+  // tests/payment.test.mjs.
   const brief = await render("/brief?InvId=123456");
   assert.equal(brief.status, 200);
   const html = await brief.text();
-  assert.match(html, /Единая точка старта/);
-  assert.match(html, /name="replyChannel"/);
-  assert.match(html, /value="telegram"/);
-  assert.match(html, /value="email"/);
-  assert.match(html, /name="invoiceId" value="123456"/);
+  assert.match(html, /Анкета доступна после оплаты/);
+  assert.doesNotMatch(html, /Единая точка старта/);
 });
 
-test("rejects an invalid intake and fails closed without the owner bot", async () => {
+test("checks paid access before it looks at the intake payload", async () => {
+  // Both requests are rejected as unpaid rather than as malformed: the payment
+  // gate runs first, so an unpaid caller cannot probe the validation rules.
   const invalid = await render("/api/intake", {
     method: "POST",
     headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.10" },
     body: JSON.stringify({ company: "" }),
   });
-  assert.equal(invalid.status, 400);
+  assert.equal(invalid.status, 402);
 
   const validPayload = {
     company: "ООО ПожСервис",
@@ -93,16 +95,19 @@ test("rejects an invalid intake and fails closed without the owner bot", async (
     website: "",
     consent: true,
   };
-  const unavailable = await render("/api/intake", {
+  const unpaid = await render("/api/intake", {
     method: "POST",
     headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.11" },
     body: JSON.stringify(validPayload),
   });
-  assert.equal(unavailable.status, 503);
-  assert.match(await unavailable.text(), /Данные не отправлены/);
+  assert.equal(unpaid.status, 402);
 });
 
-test("creates a signed checkout and validates the payment callback", async () => {
+test("payment endpoints fail closed when no order store is configured", async () => {
+  // This file deliberately runs without DATABASE_URL. A payment that cannot be
+  // recorded must not be started, and a callback that cannot be persisted must
+  // not be acknowledged. The full flow against a real PostgreSQL lives in
+  // tests/payment.test.mjs.
   const variableNames = [
     "ROBOKASSA_MERCHANT_LOGIN",
     "ROBOKASSA_PASSWORD_1",
@@ -120,13 +125,11 @@ test("creates a signed checkout and validates the payment callback", async () =>
     process.env.ROBOKASSA_B2B_RECEIPT_CONFIRMED = "false";
 
     const checkout = await render("/api/payment/start?email=buyer%40example.ru");
-    assert.equal(checkout.status, 200);
-    const html = await checkout.text();
-    assert.match(html, /auth\.robokassa\.ru\/Merchant\/Index\.aspx/);
-    assert.match(html, /name="IsTest" value="1"/);
-    assert.match(html, /name="Receipt"/);
-    assert.match(html, /name="Email" value="buyer@example.ru"/);
-    assert.doesNotMatch(html, /test-password-one|test-password-two/);
+    assert.equal(checkout.status, 303);
+    assert.equal(
+      checkout.headers.get("location"),
+      "https://poztender.example/payment/unavailable",
+    );
 
     const outSum = "4900.00";
     const invoiceId = "123456";
@@ -136,13 +139,8 @@ test("creates a signed checkout and validates the payment callback", async () =>
     const callback = await render(
       `/api/payment/result?OutSum=${outSum}&InvId=${invoiceId}&SignatureValue=${signature}`,
     );
-    assert.equal(callback.status, 200);
-    assert.equal(await callback.text(), `OK${invoiceId}`);
-
-    const forged = await render(
-      `/api/payment/result?OutSum=${outSum}&InvId=${invoiceId}&SignatureValue=${"0".repeat(64)}`,
-    );
-    assert.equal(forged.status, 403);
+    assert.equal(callback.status, 503);
+    assert.doesNotMatch(await callback.text(), /^OK/);
   } finally {
     for (const name of variableNames) {
       if (previous[name] === undefined) delete process.env[name];

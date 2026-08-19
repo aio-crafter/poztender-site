@@ -3,8 +3,11 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 
 interface Env {
-  ASSETS: Fetcher;
-  DB: D1Database;
+  // Structural rather than the Cloudflare `Fetcher` type: this project ships
+  // as a Node container, so @cloudflare/workers-types is not installed. The
+  // former `DB: D1Database` binding is gone with it — orders live in
+  // PostgreSQL, reached through db/index.ts.
+  ASSETS: { fetch(request: Request): Promise<Response> };
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

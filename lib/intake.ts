@@ -12,7 +12,6 @@ export interface IntakeSubmission {
   budget: string;
   licenses: string;
   exclusions: string;
-  invoiceId: string;
 }
 
 type IntakeResult =
@@ -51,7 +50,6 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
   const budget = clean(input.budget, 300);
   const licenses = clean(input.licenses, 800);
   const exclusions = clean(input.exclusions, 1_200);
-  const invoiceId = clean(input.invoiceId, 19);
 
   if (company.length < 2) {
     return { ok: false, error: "Укажите название компании." };
@@ -79,9 +77,6 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
   if (workTypes.length < 5) {
     return { ok: false, error: "Опишите нужные виды работ." };
   }
-  if (invoiceId && !/^\d{1,19}$/.test(invoiceId)) {
-    return { ok: false, error: "Проверьте номер платежа." };
-  }
   if (input.consent !== true) {
     return { ok: false, error: "Нужно подтвердить согласие на обработку данных." };
   }
@@ -104,7 +99,6 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
       budget,
       licenses,
       exclusions,
-      invoiceId,
     },
   };
 }
@@ -120,14 +114,17 @@ function line(label: string, value: string) {
   return `<b>${label}:</b> ${escapeTelegramHtml(value || "—")}`;
 }
 
-export function createIntakeNotification(data: IntakeSubmission) {
+// The invoice number is passed in from the confirmed order rather than taken
+// from the submission: it identifies a real payment, so it must not be
+// something the sender can choose.
+export function createIntakeNotification(data: IntakeSubmission, invoiceId?: string) {
   const reply = data.replyChannel === "telegram"
     ? `Telegram ${data.telegram}`
     : `email ${data.email}`;
 
   return [
     "<b>🔥 Новая анкета ПожТендера</b>",
-    data.invoiceId ? line("Номер платежа", data.invoiceId) : "",
+    invoiceId ? line("Номер платежа", invoiceId) : "",
     line("Компания", data.company),
     line("ИНН", data.inn),
     line("Контакт", data.contactName),
