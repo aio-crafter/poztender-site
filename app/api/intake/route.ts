@@ -3,8 +3,9 @@ import {
   createIntakeNotification,
   validateIntakeSubmission,
 } from "../../../lib/intake";
-import { claimGrant, findOrderForCookie, isGrantActive } from "../../../lib/orders";
+import { claimGrant, findSelectedOrder, isGrantActive } from "../../../lib/orders";
 import {
+  readOrderSelectorFromHeader,
   readSessionSecret,
 } from "../../../lib/payment-session";
 import {
@@ -73,12 +74,14 @@ export async function POST(request: Request) {
 
   if (!isDatabaseConfigured()) return unpaid;
 
-  const secret = readSessionSecret(request.headers.get("cookie"));
-  if (!secret) return unpaid;
+  const cookieHeader = request.headers.get("cookie");
+  const secret = readSessionSecret(cookieHeader);
+  const invoiceId = readOrderSelectorFromHeader(cookieHeader);
+  if (!secret || invoiceId === null) return unpaid;
 
   let state;
   try {
-    state = await findOrderForCookie(secret);
+    state = await findSelectedOrder(secret, invoiceId);
   } catch (error) {
     console.error("[intake] access lookup failed", error instanceof Error ? error.message : error);
     return json({ ok: false, error: "Сервис временно недоступен. Попробуйте ещё раз." }, 503);

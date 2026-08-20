@@ -1,7 +1,7 @@
 import { isDatabaseConfigured } from "../../../db";
 import { redeemAccessLink } from "../../../lib/access-links";
 import { findGrantForOrder, isGrantActive } from "../../../lib/orders";
-import { buildSetCookie } from "../../../lib/payment-session";
+import { buildOrderCookie, buildSetCookie } from "../../../lib/payment-session";
 
 export const dynamic = "force-dynamic";
 
@@ -49,16 +49,19 @@ export async function GET(request: Request) {
   // The session must not expire before the access it restores.
   const remainingSeconds = Math.ceil((grant!.validUntil.getTime() - Date.now()) / 1000);
 
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location: new URL(nextStepFor(order.plan), request.url).toString(),
-      "cache-control": "no-store, max-age=0",
-      "referrer-policy": "no-referrer",
-      "set-cookie": buildSetCookie(token, {
-        secure: url.protocol === "https:",
-        maxAgeSeconds: remainingSeconds,
-      }),
-    },
+  // Restoring access also makes this order the selected one, so the customer
+  // lands on their own order even on a device that has never seen it.
+  const secure = url.protocol === "https:";
+  const headers = new Headers({
+    location: new URL(nextStepFor(order.plan), request.url).toString(),
+    "cache-control": "no-store, max-age=0",
+    "referrer-policy": "no-referrer",
   });
+  headers.append("set-cookie", buildSetCookie(token, { secure, maxAgeSeconds: remainingSeconds }));
+  headers.append(
+    "set-cookie",
+    buildOrderCookie(String(order.invoiceId), { secure, maxAgeSeconds: remainingSeconds }),
+  );
+
+  return new Response(null, { status: 303, headers });
 }

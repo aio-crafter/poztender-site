@@ -3,10 +3,12 @@ import { cookies } from "next/headers";
 import { Footer, Header, Steps } from "../../site-chrome";
 import { CopyButton } from "./copy-button";
 import { isDatabaseConfigured } from "../../../db";
-import { findOrderForCookie, ORDER_STATUS } from "../../../lib/orders";
+import { findSelectedOrder, ORDER_STATUS } from "../../../lib/orders";
 import {
   CHECKOUT_COOKIE,
+  ORDER_COOKIE,
   isWellFormedSecret,
+  readOrderSelector,
 } from "../../../lib/payment-session";
 import { productForPlan } from "../../../lib/robokassa";
 
@@ -21,11 +23,15 @@ export const metadata: Metadata = { title: "Оплата для ИП и орга
 async function loadOrder() {
   if (!isDatabaseConfigured()) return null;
 
-  const secret = (await cookies()).get(CHECKOUT_COOKIE)?.value;
-  if (!isWellFormedSecret(secret)) return null;
+  const jar = await cookies();
+  const secret = jar.get(CHECKOUT_COOKIE)?.value;
+  // Both are required: the secret proves the session, the selector names which
+  // of that session's orders this page is about.
+  const invoiceId = readOrderSelector(jar.get(ORDER_COOKIE)?.value);
+  if (!isWellFormedSecret(secret) || invoiceId === null) return null;
 
   try {
-    const state = await findOrderForCookie(secret);
+    const state = await findSelectedOrder(secret, invoiceId);
     return state?.order.buyerType === "business" ? state.order : null;
   } catch (error) {
     console.error("[invoice] lookup failed", error instanceof Error ? error.message : error);

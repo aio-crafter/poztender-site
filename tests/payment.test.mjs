@@ -74,6 +74,33 @@ async function request(path, init = {}, instance = worker) {
   );
 }
 
+/**
+ * The browser's whole cookie jar for a response. Two cookies are now issued —
+ * the session secret and the order selector — and both must travel back.
+ */
+function cookieHeader(response) {
+  return response.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+}
+
+/** Applies a response's Set-Cookie headers on top of an existing jar. */
+function mergeCookies(previous, response) {
+  const jar = new Map(
+    (previous ? previous.split("; ") : []).map((pair) => {
+      const at = pair.indexOf("=");
+      return [pair.slice(0, at), pair.slice(at + 1)];
+    }),
+  );
+  for (const value of response.headers.getSetCookie()) {
+    const [pair] = value.split(";");
+    const at = pair.indexOf("=");
+    jar.set(pair.slice(0, at), pair.slice(at + 1));
+  }
+  return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
 const sha256 = (value) => createHash("sha256").update(value, "utf8").digest("hex");
 const resultSignature = (outSum, invId, password = PASSWORD_2) =>
   sha256(`${outSum}:${invId}:${password}`);
@@ -92,9 +119,8 @@ function readFormFields(html) {
 async function startCheckout(query = "email=buyer%40example.ru") {
   const response = await request(`/api/payment/start?${query}`);
   assert.equal(response.status, 200, "checkout should render the Robokassa form");
-  const setCookie = response.headers.get("set-cookie") ?? "";
-  const cookie = setCookie.split(";")[0];
-  return { fields: readFormFields(await response.text()), cookie, setCookie };
+  const setCookie = response.headers.getSetCookie().join(" | ");
+  return { fields: readFormFields(await response.text()), cookie: cookieHeader(response), setCookie };
 }
 
 /**
@@ -733,7 +759,7 @@ async function startBusinessCheckout(extra = "") {
     `/api/payment/start?email=buyer%40company.ru&${BUSINESS_QUERY}${extra}`,
   );
   assert.equal(response.status, 303, "a business checkout must not render a Robokassa form");
-  const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0];
+  const cookie = cookieHeader(response);
   return { response, cookie };
 }
 
@@ -1082,14 +1108,19 @@ test("restarting checkout keeps the session, so paying the first attempt still g
   const second = await request("/api/payment/start?email=buyer%40example.ru", {
     cookie: first.cookie,
   });
+  const issued = second.headers.getSetCookie();
   const secondFields = readFormFields(await second.text());
 
-  // The session is reused rather than replaced.
-  assert.equal(second.headers.get("set-cookie")?.split(";")[0], first.cookie);
+  // The session secret is reused; only the selector moves to the new order.
+  const checkoutCookie = first.cookie.split("; ").find((c) => c.startsWith("poztender_checkout="));
+  assert.ok(issued.some((value) => value.startsWith(`${checkoutCookie};`)));
+  assert.ok(issued.some((value) => value.startsWith(`poztender_order=${secondFields.InvId};`)));
   assert.notEqual(secondFields.InvId, first.fields.InvId);
   assert.equal((await orderRows()).length, 2);
 
-  // Pay the *first* attempt.
+  // Pay the *first* attempt. Its selector cookie is still the one the browser
+  // held before the second checkout, which is what a customer returning from
+  // the first Robokassa tab would send.
   await payCallback(first.fields.InvId);
 
   const html = await (await request("/payment/success", { cookie: first.cookie })).text();
@@ -1222,5 +1253,167 @@ test("an unpaid visitor sees the payment-required state at step one", async () =
   const html = await (await request("/brief")).text();
   assert.deepEqual(stepStates(html), ["active", "upcoming", "upcoming"]);
   assert.match(html, /Анкета доступна после оплаты/);
+});
+
+// --- regression: a browser that already owns an order ----------------------
+
+test("REGRESSION: a new business order opens its invoice even if the browser already paid for something", async () => {
+  // /api/payment/start reuses the browser's existing checkout secret, so both
+  // orders end up sharing one session_hash. findOrderForCookie then prefers the
+  // *paid* order, and /payment/invoice — which only accepts a business order —
+  // gets handed the older individual one and reports "Счёт не сформирован".
+  const { fields, cookie } = await startCheckout("email=person%40example.ru&buyerType=individual");
+  await payCallback(fields.InvId);
+
+  const second = await request(
+    `/api/payment/start?email=repro%40company.ru&${BUSINESS_QUERY}`,
+    { cookie },
+  );
+  assert.equal(second.status, 303);
+  assert.equal(second.headers.get("location"), `${ORIGIN}/payment/invoice`);
+  // What the browser now holds: same secret, selector moved to the new order.
+  const jar = mergeCookies(cookie, second);
+
+  const orders = await orderRows();
+  const business = orders.find((o) => o.buyer_type === "business");
+  assert.ok(business, "the business order was created");
+  assert.equal(business.status, "awaiting_bank_payment");
+  assert.equal(
+    orders[0].session_hash,
+    business.session_hash,
+    "both orders share one session, which is what triggers the bug",
+  );
+
+  const html = await (await request("/payment/invoice", { cookie: jar })).text();
+  assert.match(html, /Оплата для ИП и организаций/);
+  assert.match(html, new RegExp(String(business.invoice_id)));
+  assert.doesNotMatch(html, /Счёт не сформирован/);
+});
+
+// --- the selected order, and why the invoice number is not a credential ----
+
+test("B: a new individual order shows its own state, not the earlier paid one", async () => {
+  const first = await startCheckout("email=one%40example.ru&buyerType=individual");
+  await payCallback(first.fields.InvId);
+
+  const second = await request("/api/payment/start?email=two%40example.ru&buyerType=individual", {
+    cookie: first.cookie,
+  });
+  const secondFields = readFormFields(await second.text());
+  const jar = mergeCookies(first.cookie, second);
+
+  // Back from Robokassa before the callback lands.
+  const before = await (await request("/payment/success", { cookie: jar })).text();
+  assert.match(before, /Платёж обрабатывается/, "the new order is still pending");
+  assert.doesNotMatch(before, /Платёж подтверждён/, "the older paid order must not be shown");
+
+  await payCallback(secondFields.InvId);
+  assert.match(
+    await (await request("/payment/success", { cookie: jar })).text(),
+    /Платёж подтверждён/,
+  );
+});
+
+test("C: two business orders in a row — the invoice shows the one just created", async () => {
+  const first = await startBusinessCheckout();
+  const firstOrder = (await orderRows())[0];
+
+  const second = await request(
+    `/api/payment/start?email=second%40company.ru&${BUSINESS_QUERY}`,
+    { cookie: first.cookie },
+  );
+  const jar = mergeCookies(first.cookie, second);
+  const orders = await orderRows();
+  const secondOrder = orders.find((o) => o.id !== firstOrder.id);
+
+  // Both are business and both awaiting payment, so no ranking could tell them
+  // apart — only the selector can.
+  assert.equal(orders.length, 2);
+  assert.equal(secondOrder.status, "awaiting_bank_payment");
+
+  const html = await (await request("/payment/invoice", { cookie: jar })).text();
+  assert.match(html, new RegExp(String(secondOrder.invoice_id)));
+  assert.doesNotMatch(html, new RegExp(String(firstOrder.invoice_id)));
+});
+
+test("G: a forged selector for someone else's order is refused", async () => {
+  // Victim's order, in a different browser.
+  const victim = await startBusinessCheckout();
+  const victimOrder = (await orderRows())[0];
+
+  // Attacker's own session, pointed at the victim's invoice number.
+  const attacker = await startCheckout("email=attacker%40example.ru&buyerType=individual");
+  const attackerSecret = attacker.cookie
+    .split("; ")
+    .find((c) => c.startsWith("poztender_checkout="));
+
+  const forged = `${attackerSecret}; poztender_order=${victimOrder.invoice_id}`;
+  const html = await (await request("/payment/invoice", { cookie: forged })).text();
+  assert.match(html, /Счёт не сформирован/);
+  assert.doesNotMatch(html, new RegExp(String(victimOrder.invoice_id)));
+
+  // And the victim's own jar still works, so the refusal is about ownership.
+  assert.match(
+    await (await request("/payment/invoice", { cookie: victim.cookie })).text(),
+    new RegExp(String(victimOrder.invoice_id)),
+  );
+});
+
+test("the invoice number alone opens nothing", async () => {
+  const { fields, cookie } = await startCheckout();
+  await payCallback(fields.InvId);
+
+  const secret = cookie.split("; ").find((c) => c.startsWith("poztender_checkout="));
+  const selector = `poztender_order=${fields.InvId}`;
+
+  // Selector without a session: refused.
+  assert.match(
+    await (await request("/brief", { cookie: selector })).text(),
+    /Анкета доступна после оплаты/,
+  );
+  // Session without a selector: refused, because nothing names the order.
+  assert.match(
+    await (await request("/brief", { cookie: secret })).text(),
+    /Анкета доступна после оплаты/,
+  );
+  // Both together: allowed.
+  assert.match(
+    await (await request("/brief", { cookie: `${secret}; ${selector}` })).text(),
+    /Единая точка старта/,
+  );
+});
+
+test("a malformed selector is refused rather than guessed around", async () => {
+  const { fields, cookie } = await startCheckout();
+  await payCallback(fields.InvId);
+  const secret = cookie.split("; ").find((c) => c.startsWith("poztender_checkout="));
+
+  // Surrounding whitespace is stripped per RFC 6265, so a padded value is the
+  // same selector — and still subject to the ownership check.
+  for (const value of ["abc", "-1", "0", "1.5", "", "99999999999999999999", "0x1f"]) {
+    const html = await (
+      await request("/brief", { cookie: `${secret}; poztender_order=${value}` })
+    ).text();
+    assert.match(html, /Анкета доступна после оплаты/, `selector=${value}`);
+  }
+});
+
+test("a new checkout does not hand the previous order's entitlement to the new one", async () => {
+  const first = await startCheckout();
+  await payCallback(first.fields.InvId);
+  assert.match(await (await request("/brief", { cookie: first.cookie })).text(), /Единая точка старта/);
+
+  const second = await request("/api/payment/start?email=again%40example.ru", {
+    cookie: first.cookie,
+  });
+  const jar = mergeCookies(first.cookie, second);
+
+  // The new order is unpaid, so the old grant must not carry over to it.
+  assert.match(
+    await (await request("/brief", { cookie: jar })).text(),
+    /Анкета доступна после оплаты/,
+  );
+  // Only one grant exists throughout.
+  assert.equal((await grantRows()).length, 1);
 });
 

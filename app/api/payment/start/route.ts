@@ -2,8 +2,10 @@ import { isDatabaseConfigured } from "../../../../db";
 import { validateBuyer } from "../../../../lib/buyer";
 import { createBusinessOrderNotification } from "../../../../lib/intake";
 import { createPendingOrder } from "../../../../lib/orders";
+import type { Order } from "../../../../db/schema";
 import { sendOwnerMessage, type TelegramEnvironment } from "../../../../lib/telegram";
 import {
+  buildOrderCookie,
   buildSetCookie,
   createSessionSecret,
   hashSessionSecret,
@@ -129,7 +131,7 @@ async function handleStart(request: Request) {
   // page would end up holding a cookie that points at the wrong order.
   const sessionSecret = readSessionSecret(request.headers.get("cookie")) ?? createSessionSecret();
 
-  let order;
+  let order: Order;
   try {
     order = await createPendingOrder({
       plan,
@@ -143,6 +145,20 @@ async function handleStart(request: Request) {
   }
 
   const url = new URL(request.url);
+  const secure = url.protocol === "https:";
+
+  /**
+   * Two cookies, two jobs. The secret proves the browser owns its orders; the
+   * selector names which one it is working on now. Neither is enough alone: the
+   * selector holds a public invoice number and is always re-checked against the
+   * session before an order is returned.
+   */
+  function sessionHeaders(base: Record<string, string>) {
+    const headers = new Headers(base);
+    headers.append("set-cookie", buildSetCookie(sessionSecret, { secure }));
+    headers.append("set-cookie", buildOrderCookie(String(order.invoiceId), { secure }));
+    return headers;
+  }
 
   // Robokassa accepts payments from individuals only, confirmed by their
   // support. A business order therefore never reaches Robokassa at all: no
@@ -185,11 +201,10 @@ async function handleStart(request: Request) {
 
     return new Response(null, {
       status: 303,
-      headers: {
+      headers: sessionHeaders({
         location: new URL("/payment/invoice", request.url).toString(),
         "cache-control": "no-store, max-age=0",
-        "set-cookie": buildSetCookie(sessionSecret, { secure: url.protocol === "https:" }),
-      },
+      }),
     });
   }
 
@@ -238,15 +253,14 @@ async function handleStart(request: Request) {
     `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="referrer" content="no-referrer"><title>Переход к оплате — ПожТендер</title></head><body><main><p>Переходим на защищённую страницу оплаты…</p><form action="https://auth.robokassa.ru/Merchant/Index.aspx" method="post">${inputs}<button type="submit">Перейти к оплате</button></form></main><script>document.forms[0].submit()</script></body></html>`,
     {
       status: 200,
-      headers: {
+      headers: sessionHeaders({
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store, max-age=0",
         "content-security-policy":
           "default-src 'none'; form-action https://auth.robokassa.ru; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
-        "set-cookie": buildSetCookie(sessionSecret, { secure: url.protocol === "https:" }),
-      },
+      }),
     },
   );
 }

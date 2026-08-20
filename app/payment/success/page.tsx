@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Footer, Header, Steps } from "../../site-chrome";
 import { isDatabaseConfigured } from "../../../db";
-import { findOrderForCookie, isGrantActive } from "../../../lib/orders";
+import { findSelectedOrder, isGrantActive } from "../../../lib/orders";
 import {
   CHECKOUT_COOKIE,
+  ORDER_COOKIE,
   isWellFormedSecret,
+  readOrderSelector,
 } from "../../../lib/payment-session";
 
 export const dynamic = "force-dynamic";
@@ -27,12 +29,17 @@ type View = "paid-pilot" | "paid-subscription" | "pending" | "unknown";
 async function resolveView(): Promise<View> {
   if (!isDatabaseConfigured()) return "unknown";
 
-  const secret = (await cookies()).get(CHECKOUT_COOKIE)?.value;
-  if (!isWellFormedSecret(secret)) return "unknown";
+  const jar = await cookies();
+  const secret = jar.get(CHECKOUT_COOKIE)?.value;
+  // Both are required: the secret proves the session, the selector names which
+  // of that session's orders this page is about. Without it a customer who
+  // already paid once would keep seeing that older order instead of this one.
+  const invoiceId = readOrderSelector(jar.get(ORDER_COOKIE)?.value);
+  if (!isWellFormedSecret(secret) || invoiceId === null) return "unknown";
 
   let state;
   try {
-    state = await findOrderForCookie(secret);
+    state = await findSelectedOrder(secret, invoiceId);
   } catch (error) {
     console.error("[payment] success lookup failed", error instanceof Error ? error.message : error);
     return "unknown";

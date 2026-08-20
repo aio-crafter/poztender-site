@@ -67,13 +67,23 @@ async function request(path, init = {}) {
   );
 }
 
+/**
+ * The browser's whole cookie jar for a response. Two cookies are now issued —
+ * the session secret and the order selector — and both must travel back.
+ */
+function cookieHeader(response) {
+  return response.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+}
+
 const sha256 = (value) => createHash("sha256").update(value, "utf8").digest("hex");
 const rows = async (sql) => (await testDb.db.query(sql)).rows;
 
 async function startCheckout(query) {
   const response = await request(`/api/payment/start?${query}`);
-  const setCookie = response.headers.get("set-cookie") ?? "";
-  return { response, cookie: setCookie.split(";")[0] };
+  return { response, cookie: cookieHeader(response) };
 }
 
 async function payByCard(query = "email=buyer%40example.ru") {
@@ -168,13 +178,18 @@ test("a valid token restores the session and lands on the intake form", async ()
   assert.equal(response.status, 303);
   assert.equal(response.headers.get("location"), `${ORIGIN}/brief`);
 
-  const setCookie = response.headers.get("set-cookie") ?? "";
-  assert.match(setCookie, /HttpOnly/);
-  assert.match(setCookie, /Secure/);
-  assert.match(setCookie, /SameSite=Lax/);
+  const issued = response.headers.getSetCookie();
+  assert.equal(issued.length, 2, "session secret and order selector");
+  for (const value of issued) {
+    assert.match(value, /HttpOnly/);
+    assert.match(value, /Secure/);
+    assert.match(value, /SameSite=Lax/);
+    assert.match(value, /Path=\//);
+  }
+  assert.ok(issued.some((v) => v.startsWith(`poztender_order=${order.invoice_id};`)));
 
   // The restored session opens the form in a browser that never saw checkout.
-  const cookie = setCookie.split(";")[0];
+  const cookie = cookieHeader(response);
   assert.match(await (await request("/brief", { cookie })).text(), /Единая точка старта/);
 });
 
@@ -184,7 +199,7 @@ test("the restored session outlives nothing but the grant", async () => {
   await plantToken(order.id, TOKEN_A);
 
   const response = await request(`/api/access?token=${TOKEN_A}`);
-  const maxAge = Number(/Max-Age=(\d+)/.exec(response.headers.get("set-cookie"))?.[1]);
+  const maxAge = Number(/Max-Age=(\d+)/.exec(response.headers.getSetCookie()[0])?.[1]);
   const [grant] = await rows(`SELECT valid_until FROM access_grants WHERE order_id = ${order.id}`);
   const remaining = Math.round((new Date(grant.valid_until).getTime() - Date.now()) / 1000);
 
@@ -201,9 +216,7 @@ test("recovery does not evict the browser that already had access", async () => 
   await confirmBankPayment(order.id);
   await plantToken(order.id, TOKEN_A);
 
-  const restored = (await request(`/api/access?token=${TOKEN_A}`)).headers
-    .get("set-cookie")
-    .split(";")[0];
+  const restored = cookieHeader(await request(`/api/access?token=${TOKEN_A}`));
 
   for (const cookie of [original, restored]) {
     assert.match(await (await request("/brief", { cookie })).text(), /Единая точка старта/);
@@ -230,7 +243,7 @@ test("a token for an order awaiting payment is refused", async () => {
 
   const response = await request(`/api/access?token=${TOKEN_A}`);
   assert.equal(response.headers.get("location"), `${ORIGIN}/payment/link-expired`);
-  assert.equal(response.headers.get("set-cookie"), null, "no session may be issued");
+  assert.deepEqual(response.headers.getSetCookie(), [], "no session may be issued");
 });
 
 test("an unknown, malformed or expired token is refused", async () => {
@@ -247,13 +260,13 @@ test("an unknown, malformed or expired token is refused", async () => {
   for (const attempt of attempts) {
     const response = await request(attempt);
     assert.equal(response.headers.get("location"), `${ORIGIN}/payment/link-expired`, attempt);
-    assert.equal(response.headers.get("set-cookie"), null, attempt);
+    assert.deepEqual(response.headers.getSetCookie(), [], attempt);
   }
 
   await testDb.db.query("UPDATE access_links SET expires_at = now() - interval '1 hour'");
   const expired = await request(`/api/access?token=${TOKEN_A}`);
   assert.equal(expired.headers.get("location"), `${ORIGIN}/payment/link-expired`);
-  assert.equal(expired.headers.get("set-cookie"), null);
+  assert.deepEqual(expired.headers.getSetCookie(), []);
 });
 
 test("a token cannot reach another customer's order", async () => {
@@ -266,7 +279,7 @@ test("a token cannot reach another customer's order", async () => {
   await plantToken(second.order.id, TOKEN_B);
 
   const response = await request(`/api/access?token=${TOKEN_A}`);
-  const cookie = response.headers.get("set-cookie").split(";")[0];
+  const cookie = cookieHeader(response);
   const html = await (await request("/payment/invoice", { cookie })).text();
 
   assert.match(html, new RegExp(String(first.order.invoice_id)));
@@ -284,7 +297,7 @@ test("knowing the invoice number is not enough", async () => {
   ]) {
     const response = await request(attempt);
     assert.notEqual(response.headers.get("location"), `${ORIGIN}/brief`, attempt);
-    assert.equal(response.headers.get("set-cookie"), null, attempt);
+    assert.deepEqual(response.headers.getSetCookie(), [], attempt);
   }
 });
 

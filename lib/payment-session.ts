@@ -2,6 +2,17 @@ import { sha256Hex } from "./robokassa";
 
 export const CHECKOUT_COOKIE = "poztender_checkout";
 
+/**
+ * Names which order the browser is currently working on.
+ *
+ * Deliberately NOT a credential: it holds the public invoice number, and on its
+ * own it opens nothing. Every lookup pairs it with CHECKOUT_COOKIE and returns
+ * an order only when that order also belongs to the session. Its job is to
+ * remove ambiguity — a browser can own several orders, and guessing which one
+ * is "current" by status or recency is exactly what went wrong before.
+ */
+export const ORDER_COOKIE = "poztender_order";
+
 // The cookie identifies a browser; it never proves payment, so its lifetime is
 // deliberately generous. It must comfortably outlive the longest access window
 // (30 days for a subscription, counted from payment rather than from checkout),
@@ -57,6 +68,45 @@ export function buildSetCookie(
     `Max-Age=${maxAge}`,
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+}
+
+/** The selector cookie. Public value, so it is not marked as a secret anywhere. */
+export function buildOrderCookie(
+  invoiceId: string,
+  options?: { secure?: boolean; maxAgeSeconds?: number },
+) {
+  const secure = options?.secure ?? true;
+  const maxAge = Math.max(60, Math.round(options?.maxAgeSeconds ?? CHECKOUT_COOKIE_MAX_AGE));
+  return [
+    `${ORDER_COOKIE}=${invoiceId}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function readCookie(cookieHeader: string | null | undefined, name: string) {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim();
+  }
+  return null;
+}
+
+/** Reads the selected invoice number. Shape only — ownership is checked in SQL. */
+export function readOrderSelector(value: string | null | undefined) {
+  if (typeof value !== "string" || !/^\d{1,19}$/.test(value)) return null;
+  const invoiceId = Number(value);
+  return Number.isSafeInteger(invoiceId) && invoiceId > 0 ? invoiceId : null;
+}
+
+export function readOrderSelectorFromHeader(cookieHeader: string | null | undefined) {
+  return readOrderSelector(readCookie(cookieHeader, ORDER_COOKIE));
 }
 
 /** Reads the checkout secret out of a raw Cookie header. */

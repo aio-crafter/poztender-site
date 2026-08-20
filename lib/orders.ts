@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { getDb } from "../db";
 import { accessGrants, accessLinks, orders, type AccessGrant, type Order } from "../db/schema";
 import type { BuyerDetails } from "./buyer";
@@ -168,20 +168,26 @@ export interface CheckoutState {
 }
 
 /**
- * Resolves the browser's checkout cookie to its order.
+ * Resolves the browser's *selected* order: the one named by the selector
+ * cookie, and only if it belongs to this browser.
  *
- * The cookie may hold either of two secrets, and both are accepted: the one
- * issued at checkout, or a recovery token delivered by email. Matching on
- * either means restoring access on a second device does not evict the first —
- * nothing is overwritten, the two simply point at the same order.
+ * There is no ranking here on purpose. Choosing an order by status or recency
+ * is a guess, and it guessed wrong as soon as a browser owned more than one:
+ * a customer with an earlier paid order could not open the invoice for the one
+ * they had just created. The selector says which order; this function only
+ * checks that the session is entitled to it.
  *
- * One browser can also own several orders — going back and starting checkout
- * again makes another one — so a paid order is preferred over a pending one,
- * and the newest wins within each group. Without that ordering, someone who
- * restarted checkout and then completed the *first* payment would be shown
- * "processing" forever while their paid order sat one row away.
+ * Ownership is satisfied by either secret the cookie may hold — the one issued
+ * at checkout, or a recovery token from an emailed link — so restoring access
+ * on a second device works without evicting the first.
+ *
+ * The invoice number alone proves nothing: without a matching session this
+ * returns null for every order in the table.
  */
-export async function findOrderForCookie(secret: string): Promise<CheckoutState | null> {
+export async function findSelectedOrder(
+  secret: string,
+  invoiceId: number,
+): Promise<CheckoutState | null> {
   const db = getDb();
   const [sessionHash, linkHash] = await Promise.all([
     hashSessionSecret(secret),
@@ -194,9 +200,11 @@ export async function findOrderForCookie(secret: string): Promise<CheckoutState 
     .leftJoin(accessGrants, eq(accessGrants.orderId, orders.id))
     .leftJoin(accessLinks, eq(accessLinks.orderId, orders.id))
     .where(
-      or(eq(orders.sessionHash, sessionHash), eq(accessLinks.tokenHash, linkHash)),
+      and(
+        eq(orders.invoiceId, invoiceId),
+        or(eq(orders.sessionHash, sessionHash), eq(accessLinks.tokenHash, linkHash)),
+      ),
     )
-    .orderBy(sql`CASE WHEN ${orders.status} = 'paid' THEN 0 ELSE 1 END`, desc(orders.id))
     .limit(1);
 
   return row ? { order: row.order, grant: row.grant } : null;

@@ -3,10 +3,12 @@ import { cookies } from "next/headers";
 import { Footer, Header, Steps } from "../site-chrome";
 import { BriefForm } from "./brief-form";
 import { isDatabaseConfigured } from "../../db";
-import { findOrderForCookie, isGrantActive } from "../../lib/orders";
+import { findSelectedOrder, isGrantActive } from "../../lib/orders";
 import {
   CHECKOUT_COOKIE,
+  ORDER_COOKIE,
   isWellFormedSecret,
+  readOrderSelector,
 } from "../../lib/payment-session";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +31,15 @@ type BriefState = "payment-required" | "open" | "completed";
 async function resolveState(): Promise<{ state: BriefState; submittedAt?: Date }> {
   if (!isDatabaseConfigured()) return { state: "payment-required" };
 
-  const secret = (await cookies()).get(CHECKOUT_COOKIE)?.value;
-  if (!isWellFormedSecret(secret)) return { state: "payment-required" };
+  const jar = await cookies();
+  const secret = jar.get(CHECKOUT_COOKIE)?.value;
+  // Both are required: the secret proves the session, the selector names which
+  // of that session's orders this page is about.
+  const invoiceId = readOrderSelector(jar.get(ORDER_COOKIE)?.value);
+  if (!isWellFormedSecret(secret) || invoiceId === null) return { state: "payment-required" };
 
   try {
-    const found = await findOrderForCookie(secret);
+    const found = await findSelectedOrder(secret, invoiceId);
     if (!found || found.order.plan !== "pilot") return { state: "payment-required" };
     if (found.grant?.usedAt) {
       return { state: "completed", submittedAt: found.grant.usedAt };
