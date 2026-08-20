@@ -163,3 +163,38 @@ export function createIntakeNotification(
     line("Стоп-факторы", data.exclusions),
   ].filter((entry, index, entries) => entry || entries[index - 1]).join("\n").slice(0, 4_000);
 }
+
+/**
+ * Tells the owner that an organisation or sole trader has placed an order and
+ * is waiting for an invoice. Robokassa accepts payments from individuals only,
+ * so nothing else will announce this order — without it a business customer
+ * would sit waiting for bank details nobody knew to send.
+ *
+ * Carries only what is needed to raise the invoice and the receipt. The
+ * checkout session secret, connection strings and payment passwords are not
+ * part of the order data passed in and never appear here.
+ */
+export function createBusinessOrderNotification(order: {
+  invoiceId: string;
+  buyerName: string;
+  buyerInn: string;
+  email: string;
+  plan: string;
+  amount: string;
+  status: string;
+}) {
+  return [
+    "<b>🧾 Новый заказ от организации — нужен счёт</b>",
+    line("Номер заказа", order.invoiceId),
+    line("Плательщик", order.buyerName),
+    line("ИНН", order.buyerInn),
+    line("Email", order.email),
+    line("Тариф", order.plan === "subscription" ? "Ежемесячное обслуживание" : "7-дневная калибровка"),
+    line("Сумма", `${order.amount} ₽`),
+    line("Статус", order.status),
+    "",
+    "Выставьте счёт на этот email. После поступления оплаты подтвердите её командой "
+      + `<code>node scripts/confirm-bank-payment.mjs ${escapeTelegramHtml(order.invoiceId)}</code> `
+      + "и сформируйте чек НПД в «Мой налог» с ИНН покупателя.",
+  ].join("\n").slice(0, 4_000);
+}

@@ -6,10 +6,31 @@ import { createInvoiceId, productForPlan, type PaymentPlan } from "./robokassa";
 
 // How long a confirmed payment entitles the customer, measured from the
 // moment the payment was confirmed rather than from when a page was opened.
-const ACCESS_WINDOW_SECONDS: Record<PaymentPlan, number> = {
+export const ACCESS_WINDOW_SECONDS: Record<PaymentPlan, number> = {
   pilot: 7 * 24 * 60 * 60,
   subscription: 30 * 24 * 60 * 60,
 };
+
+/**
+ * Order lifecycle.
+ *
+ * Robokassa accepts payments from individuals only — confirmed by their
+ * support — so the two buyer types never share a payment rail. An individual
+ * order starts as `pending` and is settled by the Robokassa callback; a
+ * business order starts as `awaiting_bank_payment` and is settled by hand once
+ * a bank transfer lands. Both end at `paid`, and from there the access rules
+ * are identical.
+ */
+export const ORDER_STATUS = {
+  pending: "pending",
+  awaitingBankPayment: "awaiting_bank_payment",
+  paid: "paid",
+} as const;
+
+/** The status a fresh order takes, decided by who is paying. */
+export function initialStatus(buyerType: string) {
+  return buyerType === "business" ? ORDER_STATUS.awaitingBankPayment : ORDER_STATUS.pending;
+}
 
 function isUniqueViolation(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
@@ -44,7 +65,7 @@ export async function createPendingOrder(input: {
           plan: input.plan,
           expectedAmount: product.amount,
           email: input.email,
-          status: "pending",
+          status: initialStatus(input.buyer.buyerType),
           sessionHash: input.sessionHash,
           buyerType: input.buyer.buyerType,
           buyerInn: input.buyer.buyerInn,
@@ -64,7 +85,8 @@ export type ConfirmationOutcome =
   | { outcome: "confirmed"; order: Order }
   | { outcome: "already-paid"; order: Order }
   | { outcome: "unknown-order" }
-  | { outcome: "amount-mismatch" };
+  | { outcome: "amount-mismatch" }
+  | { outcome: "not-a-robokassa-order" };
 
 /**
  * The authoritative payment transition, called only from the ResultURL
@@ -90,6 +112,12 @@ export async function confirmPayment(input: {
       .limit(1);
 
     if (!order) return { outcome: "unknown-order" };
+
+    // A business order is never paid through Robokassa. Rejecting it here
+    // stops a callback — genuine or forged — from settling an invoice that is
+    // waiting on a bank transfer.
+    if (order.buyerType === "business") return { outcome: "not-a-robokassa-order" };
+
     if (!sameAmount(order.expectedAmount, input.outSum)) {
       return { outcome: "amount-mismatch" };
     }
@@ -97,8 +125,17 @@ export async function confirmPayment(input: {
     const paidAt = new Date();
     const claimed = await tx
       .update(orders)
-      .set({ status: "paid", paidAt })
-      .where(and(eq(orders.id, order.id), eq(orders.status, "pending")))
+      .set({ status: ORDER_STATUS.paid, paidAt })
+      // buyerType is repeated in the predicate on purpose: the Robokassa path
+      // must be unable to touch a business order even if the check above is
+      // ever refactored away.
+      .where(
+        and(
+          eq(orders.id, order.id),
+          eq(orders.status, ORDER_STATUS.pending),
+          eq(orders.buyerType, "individual"),
+        ),
+      )
       .returning();
 
     if (claimed.length === 0) {

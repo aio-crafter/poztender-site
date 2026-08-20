@@ -105,6 +105,12 @@ async function handleResult(request: Request) {
       logCallback("rejected:amount-mismatch", invoiceId);
       return new Response("Amount does not match the order", { status: 400 });
 
+    case "not-a-robokassa-order":
+      // A business order settles by bank transfer, never through Robokassa.
+      // Acknowledging this would mark an unpaid invoice as settled.
+      logCallback("rejected:business-order", invoiceId);
+      return new Response("Order is not payable through Robokassa", { status: 409 });
+
     case "already-paid":
       // A retry or a concurrent delivery. Nothing was changed: paidAt keeps its
       // original value and no second grant exists. Robokassa still needs OK.

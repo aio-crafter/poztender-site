@@ -1,6 +1,8 @@
 import { isDatabaseConfigured } from "../../../../db";
 import { validateBuyer } from "../../../../lib/buyer";
+import { createBusinessOrderNotification } from "../../../../lib/intake";
 import { createPendingOrder } from "../../../../lib/orders";
+import { sendOwnerMessage, type TelegramEnvironment } from "../../../../lib/telegram";
 import {
   buildSetCookie,
   createSessionSecret,
@@ -70,23 +72,11 @@ function isStartRateLimited(request: Request) {
 
 async function handleStart(request: Request) {
   const runtimeEnv = process.env as RobokassaEnvironment;
-  const paymentMode = resolvePaymentMode(runtimeEnv);
-  if (!paymentMode.mode) {
-    // Missing credentials and a deliberately unconfirmed receipt flag are
-    // intended resting states, so they stay quiet. An ambiguous flag is not:
-    // it means someone wrote a value like "True" or "1" and the checkout is
-    // closed only because this refuses to guess. That needs to reach the
-    // hosting log. The reason names the variable at fault, never its value.
-    if (paymentMode.reason.startsWith("ambiguous-")) {
-      console.error(`[payment] checkout closed, fix this variable: ${paymentMode.reason}`);
-    }
-    return Response.redirect(new URL("/payment/unavailable", request.url), 303);
-  }
 
   if (!isDatabaseConfigured()) {
     // Without an order store a payment cannot be recorded, and an unrecorded
-    // payment is worse than one that never started.
-    console.error("[payment] checkout closed: DATABASE_URL is not set");
+    // payment is worse than one that never started. Quiet like the other
+    // intended resting states — the closed checkout is the signal.
     return Response.redirect(new URL("/payment/unavailable", request.url), 303);
   }
 
@@ -109,6 +99,24 @@ async function handleStart(request: Request) {
   const buyerCheck = validateBuyer(submission);
   if (!buyerCheck.ok) {
     return Response.redirect(new URL(`${errorPath}?error=${buyerCheck.error}`, request.url), 303);
+  }
+
+  const isBusiness = buyerCheck.buyer.buyerType === "business";
+
+  // An individual pays by card, so Robokassa's configuration is checked before
+  // anything is written: a closed card checkout must not leave orphan orders
+  // behind. A business order is unaffected — it never uses that rail.
+  const paymentMode = resolvePaymentMode(runtimeEnv);
+  if (!isBusiness && !paymentMode.mode) {
+    // Missing credentials and a deliberately unconfirmed receipt flag are
+    // intended resting states, so they stay quiet. An ambiguous flag is not:
+    // it means someone wrote a value like "True" or "1" and the checkout is
+    // closed only because this refuses to guess. That needs to reach the
+    // hosting log. The reason names the variable at fault, never its value.
+    if (paymentMode.reason.startsWith("ambiguous-")) {
+      console.error(`[payment] checkout closed, fix this variable: ${paymentMode.reason}`);
+    }
+    return Response.redirect(new URL("/payment/unavailable", request.url), 303);
   }
 
   // The price is looked up from the plan identifier here and written to the
@@ -135,6 +143,56 @@ async function handleStart(request: Request) {
   }
 
   const url = new URL(request.url);
+
+  // Robokassa accepts payments from individuals only, confirmed by their
+  // support. A business order therefore never reaches Robokassa at all: no
+  // signature is computed, no Receipt is built and the buyer's tax details are
+  // never sent there. It waits for a bank transfer instead.
+  if (isBusiness) {
+    // Nothing else announces this order: there is no Robokassa callback for a
+    // bank transfer, so without this the buyer would wait for an invoice
+    // nobody knew to raise. Delivery is awaited so a failure is logged before
+    // the response, but it can never undo the order — the row is already
+    // committed and the invoice page works regardless.
+    try {
+      const notification = createBusinessOrderNotification({
+        invoiceId: String(order.invoiceId),
+        buyerName: order.buyerName ?? "",
+        buyerInn: order.buyerInn ?? "",
+        email: order.email,
+        plan: order.plan,
+        amount: order.expectedAmount,
+        status: order.status,
+      });
+      const delivery = await sendOwnerMessage(
+        process.env as TelegramEnvironment,
+        notification,
+        "[payment]",
+      );
+      if (!delivery.ok) {
+        // The reason is a fixed identifier; the message, the bot token and the
+        // buyer's details are not logged.
+        console.error(
+          `[payment] business order notification not delivered: ${delivery.reason} invId=${order.invoiceId}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[payment] business order notification threw",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location: new URL("/payment/invoice", request.url).toString(),
+        "cache-control": "no-store, max-age=0",
+        "set-cookie": buildSetCookie(sessionSecret, { secure: url.protocol === "https:" }),
+      },
+    });
+  }
+
   const origin = url.origin;
   const successUrl = `${origin}/payment/success`;
   const failUrl = `${origin}/payment/failed`;

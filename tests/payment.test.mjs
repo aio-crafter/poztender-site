@@ -54,17 +54,20 @@ function nextClientAddress() {
 }
 
 async function request(path, init = {}, instance = worker) {
-  const { cookie, ...rest } = init;
+  // `headers` is pulled out of the rest before spreading: leaving it in would
+  // let `...rest` replace the merged header object wholesale and silently drop
+  // the cookie, which made paid-access tests pass for the wrong reason.
+  const { cookie, headers, ...rest } = init;
   return instance.fetch(
     new Request(`${ORIGIN}${path}`, {
+      ...rest,
       headers: {
         accept: "text/html",
         "x-forwarded-proto": "https",
         "x-forwarded-for": nextClientAddress(),
         ...(cookie ? { cookie } : {}),
-        ...(rest.headers ?? {}),
+        ...(headers ?? {}),
       },
-      ...rest,
     }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
@@ -92,6 +95,30 @@ async function startCheckout(query = "email=buyer%40example.ru") {
   const setCookie = response.headers.get("set-cookie") ?? "";
   const cookie = setCookie.split(";")[0];
   return { fields: readFormFields(await response.text()), cookie, setCookie };
+}
+
+/**
+ * Performs the same transaction the administrative tool performs, using the
+ * in-process PGlite handle. The tool itself — argument handling, refusals,
+ * output — is covered end-to-end in tests/bank-payment.test.mjs; here the
+ * point is what a confirmed bank payment means for access.
+ */
+async function confirmBankPayment(invoiceId) {
+  const { rows: claimed } = await testDb.db.query(
+    `UPDATE orders SET status = 'paid', paid_at = now()
+      WHERE invoice_id = ${invoiceId} AND status = 'awaiting_bank_payment'
+      RETURNING id, paid_at, plan`,
+  );
+  if (claimed.length === 0) return false;
+  const [order] = claimed;
+  await testDb.db.query(
+    `INSERT INTO access_grants (order_id, valid_from, valid_until)
+     VALUES (${order.id}, '${new Date(order.paid_at).toISOString()}',
+             '${new Date(order.paid_at).toISOString()}'::timestamptz
+               + (${order.plan === "subscription" ? 30 : 7} || ' days')::interval)
+     ON CONFLICT (order_id) DO NOTHING`,
+  );
+  return true;
 }
 
 const rows = async (sql) => (await testDb.db.query(sql)).rows;
@@ -570,8 +597,9 @@ test("an omitted buyer type falls back to individual", async () => {
 });
 
 test("an organisation buyer stores its name and INN", async () => {
-  await startCheckout(
-    `email=buyer%40example.ru&buyerType=business&buyerInn=${ORG_INN}` +
+  // Business checkouts redirect to the invoice page rather than to Robokassa.
+  await request(
+    `/api/payment/start?email=buyer%40example.ru&buyerType=business&buyerInn=${ORG_INN}` +
       "&buyerName=%D0%9E%D0%9E%D0%9E%20%C2%AB%D0%A0%D0%BE%D0%BC%D0%B0%D1%88%D0%BA%D0%B0%C2%BB",
   );
   const [order] = await orderRows();
@@ -581,8 +609,8 @@ test("an organisation buyer stores its name and INN", async () => {
 });
 
 test("a sole trader buyer with a 12-digit INN is accepted", async () => {
-  await startCheckout(
-    `email=ip%40example.ru&buyerType=business&buyerInn=${SOLE_TRADER_INN}` +
+  await request(
+    `/api/payment/start?email=ip%40example.ru&buyerType=business&buyerInn=${SOLE_TRADER_INN}` +
       "&buyerName=%D0%98%D0%9F%20%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2",
   );
   const [order] = await orderRows();
@@ -684,6 +712,357 @@ test("the receipt describes the service being sold", async () => {
   assert.equal(item.payment_object, "service");
   // The receipt total must equal what Robokassa is asked to charge.
   assert.equal(item.sum, Number(fields.OutSum));
+});
+
+// --- business flow: bank transfer, never Robokassa ------------------------
+
+const BUSINESS_QUERY =
+  `buyerType=business&buyerInn=${ORG_INN}` +
+  "&buyerName=%D0%9E%D0%9E%D0%9E%20%C2%AB%D0%A0%D0%BE%D0%BC%D0%B0%D1%88%D0%BA%D0%B0%C2%BB";
+
+/** Starts a business checkout and returns the order plus the session cookie. */
+async function startBusinessCheckout(extra = "") {
+  const response = await request(
+    `/api/payment/start?email=buyer%40company.ru&${BUSINESS_QUERY}${extra}`,
+  );
+  assert.equal(response.status, 303, "a business checkout must not render a Robokassa form");
+  const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0];
+  return { response, cookie };
+}
+
+test("an individual checkout still goes to Robokassa", async () => {
+  const { fields } = await startCheckout("email=buyer%40example.ru&buyerType=individual");
+  assert.ok(fields.SignatureValue, "the card flow must still be signed");
+  assert.equal(fields.OutSum, PILOT_AMOUNT);
+  const [order] = await orderRows();
+  assert.equal(order.status, "pending");
+});
+
+test("a business checkout never reaches Robokassa", async () => {
+  const { response } = await startBusinessCheckout();
+  assert.equal(response.headers.get("location"), `${ORIGIN}/payment/invoice`);
+
+  const body = await response.text();
+  assert.doesNotMatch(body, /robokassa/i, "no Robokassa form may be rendered");
+  assert.doesNotMatch(body, /SignatureValue/, "no payment signature may be produced");
+  assert.doesNotMatch(body, /Receipt/, "no receipt may be built for a business buyer");
+});
+
+test("a business order waits for a bank transfer", async () => {
+  await startBusinessCheckout();
+  const [order] = await orderRows();
+  assert.equal(order.status, "awaiting_bank_payment");
+  assert.equal(order.buyer_type, "business");
+  assert.equal(order.buyer_inn, ORG_INN);
+  assert.equal(order.expected_amount, PILOT_AMOUNT);
+  assert.equal(order.paid_at, null);
+  assert.equal((await grantRows()).length, 0);
+});
+
+test("the invoice page shows the order and refuses a stranger", async () => {
+  const { cookie } = await startBusinessCheckout();
+  const [order] = await orderRows();
+
+  const html = await (await request("/payment/invoice", { cookie })).text();
+  assert.match(html, /Оплата для ИП и организаций/);
+  assert.match(html, new RegExp(String(order.invoice_id)));
+  assert.match(html, /4\s?900/);
+  assert.match(html, /калибровк/i);
+  assert.match(html, new RegExp(ORG_INN));
+  assert.match(html, /Ожидает оплаты/);
+
+  const anonymous = await (await request("/payment/invoice")).text();
+  assert.match(anonymous, /Счёт не сформирован/);
+  assert.doesNotMatch(anonymous, new RegExp(String(order.invoice_id)));
+});
+
+test("a business checkout is not blocked by Robokassa being misconfigured", async () => {
+  // The card rail is unrelated to a bank transfer, so an unusable Robokassa
+  // configuration must not stop an organisation from ordering.
+  process.env.ROBOKASSA_TEST_MODE = "nonsense";
+  try {
+    const { response } = await startBusinessCheckout();
+    assert.equal(response.headers.get("location"), `${ORIGIN}/payment/invoice`);
+    const [order] = await orderRows();
+    assert.equal(order.status, "awaiting_bank_payment");
+  } finally {
+    process.env.ROBOKASSA_TEST_MODE = "true";
+  }
+});
+
+test("a Robokassa callback can never settle a business order", async () => {
+  const { cookie } = await startBusinessCheckout();
+  const [order] = await orderRows();
+  const invoiceId = String(order.invoice_id);
+
+  // Correctly signed with Password#2, exactly as Robokassa would send it.
+  const response = await payCallback(invoiceId);
+  assert.equal(response.status, 409);
+  assert.doesNotMatch(await response.text(), /^OK/);
+
+  const [after] = await orderRows();
+  assert.equal(after.status, "awaiting_bank_payment", "status must not move");
+  assert.equal(after.paid_at, null);
+  assert.equal((await grantRows()).length, 0, "no entitlement may be created");
+
+  // And the brief stays shut.
+  assert.match(await (await request("/brief", { cookie })).text(), /Анкета доступна после оплаты/);
+});
+
+test("manual confirmation settles a business order and grants access once", async () => {
+  const { cookie } = await startBusinessCheckout();
+  const [order] = await orderRows();
+  const invoiceId = String(order.invoice_id);
+
+  assert.equal(await confirmBankPayment(invoiceId), true);
+
+  const [paid] = await orderRows();
+  assert.equal(paid.status, "paid");
+  assert.ok(paid.paid_at);
+
+  const grants = await grantRows();
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].order_id, paid.id);
+  // The same seven-day window individuals get, measured from the confirmation.
+  const days = (new Date(grants[0].valid_until) - new Date(grants[0].valid_from)) / 86_400_000;
+  assert.equal(Math.round(days), 7);
+  assert.equal(
+    new Date(grants[0].valid_from).getTime(),
+    new Date(paid.paid_at).getTime(),
+    "access must run from the confirmed payment",
+  );
+
+  // Access now works exactly as it does for a card payment.
+  assert.match(await (await request("/brief", { cookie })).text(), /Единая точка старта/);
+  assert.match(await (await request("/payment/invoice", { cookie })).text(), /Оплата получена/);
+});
+
+test("repeating the confirmation changes nothing and creates no second grant", async () => {
+  await startBusinessCheckout();
+  const [order] = await orderRows();
+  const invoiceId = String(order.invoice_id);
+
+  await confirmBankPayment(invoiceId);
+  const [before] = await grantRows();
+  const [paidOnce] = await orderRows();
+
+  // A second confirmation matches no pending row, so it is a no-op.
+  assert.equal(await confirmBankPayment(invoiceId), false);
+
+  const grants = await grantRows();
+  const [paidTwice] = await orderRows();
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].id, before.id);
+  assert.equal(
+    new Date(paidTwice.paid_at).getTime(),
+    new Date(paidOnce.paid_at).getTime(),
+    "paid_at must not move",
+  );
+});
+
+test("the bank-transfer transition cannot touch an individual order", async () => {
+  // The predicate requires status 'awaiting_bank_payment', which a card order
+  // never has, so the two rails cannot cross.
+  const { fields } = await startCheckout();
+  assert.equal(await confirmBankPayment(fields.InvId), false);
+
+  const [order] = await orderRows();
+  assert.equal(order.status, "pending");
+  assert.equal((await grantRows()).length, 0);
+});
+
+// --- owner notification for business orders -------------------------------
+
+const BOT_TOKEN = "123456789:AAFakeTokenForTestsOnly-0123456789ab";
+
+/**
+ * Captures Telegram calls instead of making them. Nothing leaves the process:
+ * every other fetch still goes to the real implementation, which in these
+ * tests is never exercised.
+ */
+function interceptTelegram({ ok = true, throws = false } = {}) {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("api.telegram.org")) {
+      calls.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+      if (throws) throw new Error("network is down");
+      return new Response(JSON.stringify({ ok }), {
+        status: ok ? 200 : 500,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return original(input, init);
+  };
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+async function withTelegram(options, body) {
+  const previous = {
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chat: process.env.TELEGRAM_OWNER_CHAT_ID,
+    relay: process.env.TELEGRAM_RELAY_URL,
+  };
+  process.env.TELEGRAM_BOT_TOKEN = BOT_TOKEN;
+  process.env.TELEGRAM_OWNER_CHAT_ID = "555000";
+  delete process.env.TELEGRAM_RELAY_URL;
+
+  const telegram = interceptTelegram(options);
+  try {
+    return await body(telegram);
+  } finally {
+    telegram.restore();
+    for (const [key, value] of [
+      ["TELEGRAM_BOT_TOKEN", previous.token],
+      ["TELEGRAM_OWNER_CHAT_ID", previous.chat],
+      ["TELEGRAM_RELAY_URL", previous.relay],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test("a business order notifies the owner with everything needed to raise an invoice", async () => {
+  await withTelegram({}, async (telegram) => {
+    await startBusinessCheckout();
+    const [order] = await orderRows();
+
+    assert.equal(telegram.calls.length, 1, "exactly one message");
+    const { url, body } = telegram.calls[0];
+    assert.match(url, /\/sendMessage$/);
+    assert.equal(body.chat_id, "555000");
+
+    const text = body.text;
+    assert.match(text, new RegExp(String(order.invoice_id)));
+    assert.match(text, /ООО «Ромашка»/);
+    assert.match(text, new RegExp(ORG_INN));
+    assert.match(text, /buyer@company\.ru/);
+    assert.match(text, /калибровк/i);
+    assert.match(text, /4900\.00/);
+    assert.match(text, /awaiting_bank_payment/);
+  });
+});
+
+test("the notification carries no secrets", async () => {
+  await withTelegram({}, async (telegram) => {
+    await startBusinessCheckout();
+    const [order] = await orderRows();
+    const { text } = telegram.calls[0].body;
+
+    for (const secret of [
+      order.session_hash,
+      PASSWORD_1,
+      PASSWORD_2,
+      BOT_TOKEN,
+      testDb.url,
+      "postgresql://",
+    ]) {
+      assert.ok(!text.includes(secret), `notification leaked ${secret.slice(0, 12)}…`);
+    }
+  });
+});
+
+test("an individual order sends no owner notification", async () => {
+  await withTelegram({}, async (telegram) => {
+    await startCheckout("email=buyer%40example.ru&buyerType=individual");
+    assert.equal(telegram.calls.length, 0, "the card flow must stay silent");
+  });
+});
+
+test("a rejected Telegram delivery still leaves the business order intact", async () => {
+  await withTelegram({ ok: false }, async (telegram) => {
+    const { response, cookie } = await startBusinessCheckout();
+
+    assert.equal(telegram.calls.length, 1, "delivery was attempted");
+    assert.equal(response.headers.get("location"), `${ORIGIN}/payment/invoice`);
+
+    const [order] = await orderRows();
+    assert.equal(order.status, "awaiting_bank_payment");
+    assert.equal(order.buyer_inn, ORG_INN);
+
+    // And the buyer can still see their invoice.
+    const html = await (await request("/payment/invoice", { cookie })).text();
+    assert.match(html, new RegExp(String(order.invoice_id)));
+  });
+});
+
+test("a Telegram outage still leaves the business order intact", async () => {
+  await withTelegram({ throws: true }, async (telegram) => {
+    const { response } = await startBusinessCheckout();
+
+    assert.equal(telegram.calls.length, 1);
+    assert.equal(response.headers.get("location"), `${ORIGIN}/payment/invoice`);
+
+    const orders = await orderRows();
+    assert.equal(orders.length, 1);
+    assert.equal(orders[0].status, "awaiting_bank_payment");
+  });
+});
+
+test("a business order is created even with no Telegram configured at all", async () => {
+  const previous = process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  try {
+    const { response } = await startBusinessCheckout();
+    assert.equal(response.headers.get("location"), `${ORIGIN}/payment/invoice`);
+    const [order] = await orderRows();
+    assert.equal(order.status, "awaiting_bank_payment");
+  } finally {
+    if (previous === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = previous;
+  }
+});
+
+test("a paid intake still reaches the owner through the shared sender", async () => {
+  // Covers the delivery path that /api/intake shares with the checkout
+  // notification, so the extraction into lib/telegram.ts stays verified.
+  await withTelegram({}, async (telegram) => {
+    const { fields, cookie } = await startCheckout();
+    await payCallback(fields.InvId);
+
+    const response = await request("/api/intake", {
+      cookie,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validIntake()),
+    });
+    assert.equal(response.status, 201);
+
+    assert.equal(telegram.calls.length, 1);
+    const { text } = telegram.calls[0].body;
+    assert.match(text, /Новая анкета/);
+    assert.match(text, new RegExp(fields.InvId));
+
+    // The entitlement is spent only once delivery succeeded.
+    const [grant] = await grantRows();
+    assert.ok(grant.used_at);
+  });
+});
+
+test("a failed intake delivery reports an error and does not spend the entitlement", async () => {
+  await withTelegram({ ok: false }, async (telegram) => {
+    const { fields, cookie } = await startCheckout();
+    await payCallback(fields.InvId);
+
+    const response = await request("/api/intake", {
+      cookie,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validIntake()),
+    });
+    assert.equal(response.status, 502);
+    assert.equal(telegram.calls.length, 1);
+
+    const [grant] = await grantRows();
+    assert.equal(grant.used_at, null, "a paid customer must be able to retry");
+  });
 });
 
 // --- security retest: multi-order browsers --------------------------------

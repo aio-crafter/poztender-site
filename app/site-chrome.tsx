@@ -36,7 +36,7 @@ export function Footer() {
           <span>Исполнитель: Сурков Александр Игоревич</span>
           <span>ИНН 631608072510 · плательщик НПД</span>
           <span>Самара, Самарская область</span>
-          <span>Онлайн-оплата и автоматический чек НПД через Robokassa</span>
+          <span>Физлицам — онлайн-оплата и автоматический чек НПД через Robokassa; ИП и организациям — оплата по счёту</span>
         </div>
         <div className="footer-links">
           <a href="mailto:beastsahsa@yandex.ru">beastsahsa@yandex.ru</a>

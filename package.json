@@ -14,7 +14,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "confirm-bank-payment": "node scripts/confirm-bank-payment.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
