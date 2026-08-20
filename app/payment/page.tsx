@@ -45,10 +45,7 @@ export default async function PaymentPage({ searchParams }: PaymentPageProps) {
           <div className="price">4 900 <small>₽</small></div>
           <p>Без НДС в связи с применением НПД.</p>
           <form className="checkout-form" action="/api/payment/start" method="post">
-            <CheckoutFields error={error} />
-            <button className="button button-primary full" type="submit">
-              Оплатить онлайн <span aria-hidden="true">→</span>
-            </button>
+            <CheckoutFields error={error} individualLabel="Оплатить онлайн" />
           </form>
           <div className="payment-badges" aria-label="Способы оплаты">
             <span>МИР</span>

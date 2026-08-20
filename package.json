@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "confirm-bank-payment": "node scripts/confirm-bank-payment.mjs"
+    "confirm-bank-payment": "node scripts/confirm-bank-payment.mjs",
+    "db:status": "node scripts/migration-status.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

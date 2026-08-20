@@ -46,10 +46,7 @@ export default async function RenewPage({ searchParams }: RenewPageProps) {
           <p>Без НДС в связи с применением НПД.</p>
           <form className="checkout-form" action="/api/payment/start" method="post">
             <input type="hidden" name="plan" value="subscription" />
-            <CheckoutFields error={error} />
-            <button className="button button-primary full" type="submit">
-              Продлить онлайн <span aria-hidden="true">→</span>
-            </button>
+            <CheckoutFields error={error} individualLabel="Продлить онлайн" />
           </form>
           <div className="payment-badges" aria-label="Способы оплаты">
             <span>МИР</span>
