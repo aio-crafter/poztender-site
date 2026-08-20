@@ -1,7 +1,8 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { accessGrants, orders, type AccessGrant, type Order } from "../db/schema";
+import { accessGrants, accessLinks, orders, type AccessGrant, type Order } from "../db/schema";
 import type { BuyerDetails } from "./buyer";
+import { hashAccessToken, hashSessionSecret } from "./payment-session";
 import { createInvoiceId, productForPlan, type PaymentPlan } from "./robokassa";
 
 // How long a confirmed payment entitles the customer, measured from the
@@ -169,23 +170,47 @@ export interface CheckoutState {
 /**
  * Resolves the browser's checkout cookie to its order.
  *
- * One browser can own several orders — going back and starting checkout again
- * makes another one — so a paid order is preferred over a pending one, and the
- * newest wins within each group. Without that ordering, someone who restarted
- * checkout and then completed the *first* payment would be shown "processing"
- * forever while their paid order sat one row away.
+ * The cookie may hold either of two secrets, and both are accepted: the one
+ * issued at checkout, or a recovery token delivered by email. Matching on
+ * either means restoring access on a second device does not evict the first —
+ * nothing is overwritten, the two simply point at the same order.
+ *
+ * One browser can also own several orders — going back and starting checkout
+ * again makes another one — so a paid order is preferred over a pending one,
+ * and the newest wins within each group. Without that ordering, someone who
+ * restarted checkout and then completed the *first* payment would be shown
+ * "processing" forever while their paid order sat one row away.
  */
-export async function findOrderBySessionHash(sessionHash: string): Promise<CheckoutState | null> {
+export async function findOrderForCookie(secret: string): Promise<CheckoutState | null> {
   const db = getDb();
+  const [sessionHash, linkHash] = await Promise.all([
+    hashSessionSecret(secret),
+    hashAccessToken(secret),
+  ]);
+
   const [row] = await db
     .select({ order: orders, grant: accessGrants })
     .from(orders)
     .leftJoin(accessGrants, eq(accessGrants.orderId, orders.id))
-    .where(eq(orders.sessionHash, sessionHash))
+    .leftJoin(accessLinks, eq(accessLinks.orderId, orders.id))
+    .where(
+      or(eq(orders.sessionHash, sessionHash), eq(accessLinks.tokenHash, linkHash)),
+    )
     .orderBy(sql`CASE WHEN ${orders.status} = 'paid' THEN 0 ELSE 1 END`, desc(orders.id))
     .limit(1);
 
   return row ? { order: row.order, grant: row.grant } : null;
+}
+
+/** The entitlement for one order, if it has one. */
+export async function findGrantForOrder(orderId: number): Promise<AccessGrant | null> {
+  const db = getDb();
+  const [grant] = await db
+    .select()
+    .from(accessGrants)
+    .where(eq(accessGrants.orderId, orderId))
+    .limit(1);
+  return grant ?? null;
 }
 
 export function isGrantActive(grant: AccessGrant | null, order: Order, now = new Date()) {

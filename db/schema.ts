@@ -42,6 +42,10 @@ export const orders = pgTable(
     // sends a ResultURL for an abandoned payment, so an unpaid order stays
     // pending and is meaningless rather than wrong.
     status: text("status").notNull().default("pending"),
+    // How the payment was confirmed: 'robokassa' for the automated callback,
+    // 'bank_transfer' for a manual confirmation. Distinguishes automated from
+    // human-confirmed money without recording who the operator was.
+    paymentConfirmationSource: text("payment_confirmation_source"),
     // SHA-256 of the checkout cookie secret. The plaintext lives only in the
     // customer's browser, so a database leak cannot be replayed as a session.
     sessionHash: text("session_hash").notNull(),
@@ -88,5 +92,32 @@ export const accessGrants = pgTable("access_grants", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });
 
+/**
+ * A recovery link for an order that has already been paid for.
+ *
+ * It carries no rights of its own: redeeming it only re-establishes the
+ * checkout cookie for an order whose `status` is already 'paid', and every page
+ * still consults `access_grants` afterwards. That is what makes it safe to
+ * email, and safe to open more than once.
+ *
+ * `orderId` is UNIQUE so a resend reuses the same row instead of accumulating
+ * links, and only the SHA-256 of the token is stored — the token itself exists
+ * only in the customer's email.
+ */
+export const accessLinks = pgTable("access_links", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id")
+    .notNull()
+    .unique()
+    .references(() => orders.id),
+  tokenHash: text("token_hash").notNull().unique(),
+  // Aligned with the grant's validUntil: the link dies exactly when access does.
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+});
+
 export type Order = typeof orders.$inferSelect;
+export type AccessLink = typeof accessLinks.$inferSelect;
 export type AccessGrant = typeof accessGrants.$inferSelect;

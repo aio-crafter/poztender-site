@@ -15,6 +15,13 @@
       "when": 1787139092824,
       "tag": "0001_previous_speed",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787214369992,
+      "tag": "0002_brief_captain_cross",
+      "breakpoints": true
     }
   ]
 }

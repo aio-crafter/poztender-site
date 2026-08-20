@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { Footer, Header } from "../../site-chrome";
+import { Footer, Header, Steps } from "../../site-chrome";
 import { isDatabaseConfigured } from "../../../db";
-import { findOrderBySessionHash, isGrantActive } from "../../../lib/orders";
+import { findOrderForCookie, isGrantActive } from "../../../lib/orders";
 import {
   CHECKOUT_COOKIE,
-  hashSessionSecret,
   isWellFormedSecret,
 } from "../../../lib/payment-session";
 
@@ -33,7 +32,7 @@ async function resolveView(): Promise<View> {
 
   let state;
   try {
-    state = await findOrderBySessionHash(await hashSessionSecret(secret));
+    state = await findOrderForCookie(secret);
   } catch (error) {
     console.error("[payment] success lookup failed", error instanceof Error ? error.message : error);
     return "unknown";
@@ -53,6 +52,7 @@ export default async function PaymentSuccessPage() {
       <main>
         <Header />
         <section className="result-page shell">
+          <Steps current={3} />
           <span className="result-mark success" aria-hidden="true">✓</span>
           <p className="eyebrow">Продление подтверждено</p>
           <h1>Спасибо. Обслуживание продлено ещё на месяц.</h1>
@@ -69,11 +69,12 @@ export default async function PaymentSuccessPage() {
       <main>
         <Header />
         <section className="result-page shell">
+          <Steps current={2} />
           <span className="result-mark success" aria-hidden="true">✓</span>
           <p className="eyebrow">Платёж подтверждён</p>
           <h1>Спасибо. Следующий шаг — профиль радара.</h1>
           <p>Для старта заполните одну короткую анкету и выберите, куда получать ответы: в Telegram или на email. Анкета доступна в этом браузере 7 дней.</p>
-          <a className="button button-primary" href="/brief">Заполнить профиль радара <span aria-hidden="true">→</span></a>
+          <a className="button button-primary" href="/brief">Перейти к анкете <span aria-hidden="true">→</span></a>
         </section>
         <Footer />
       </main>
@@ -85,6 +86,7 @@ export default async function PaymentSuccessPage() {
       <main>
         <Header />
         <section className="result-page shell">
+          <Steps current={1} />
           <span className="result-mark pending" aria-hidden="true">…</span>
           <p className="eyebrow">Платёж обрабатывается</p>
           <h1>Ждём подтверждение от банка.</h1>

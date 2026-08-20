@@ -15,6 +15,7 @@
 // matches nothing the second time, so paid_at keeps its original value and no
 // second entitlement is created.
 import { Pool } from "pg";
+import { deliverAccessEmail, requireOrigin } from "./lib/access-delivery.mjs";
 
 // Kept in step with ACCESS_WINDOW_SECONDS in lib/orders.ts. A mismatch would
 // hand business buyers a different access window from card buyers, so the
@@ -41,7 +42,8 @@ async function settle(client, invoiceId) {
   }
 
   const { rows: claimed } = await client.query(
-    `UPDATE orders SET status = 'paid', paid_at = now()
+    `UPDATE orders SET status = 'paid', paid_at = now(),
+            payment_confirmation_source = 'bank_transfer'
       WHERE id = $1 AND status = 'awaiting_bank_payment'
       RETURNING paid_at`,
     [order.id],
@@ -64,12 +66,30 @@ async function settle(client, invoiceId) {
 
   await client.query("COMMIT");
 
+  // Everything below runs after the money is committed. Delivery is advisory:
+  // a mail failure leaves the order paid and the grant in place, and the
+  // operator is told to run resend-access rather than to retry the payment.
+  let delivery = "skipped";
+  try {
+    delivery = await deliverAccessEmail(client, { ...order, invoice_id: invoiceId }, requireOrigin());
+  } catch (error) {
+    delivery = `failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+
   return [
     `order ${invoiceId} confirmed as paid`,
     `  buyer:  ${order.buyer_name} (ИНН ${order.buyer_inn})`,
     `  amount: ${order.expected_amount}`,
     `  access: ${days} days from ${claimed[0].paid_at.toISOString()}`,
+    `  email:  ${delivery}`,
     "",
+    ...(delivery === "sent"
+      ? []
+      : [
+          "The access email was NOT delivered. The payment stands and access is open;",
+          `re-send it with:  npm run resend-access -- ${invoiceId}`,
+          "",
+        ]),
     "Next: issue the НПД receipt to this buyer in «Мой налог», stating their ИНН.",
   ];
 }

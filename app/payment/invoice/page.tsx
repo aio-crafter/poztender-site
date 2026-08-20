@@ -3,10 +3,9 @@ import { cookies } from "next/headers";
 import { Footer, Header, Steps } from "../../site-chrome";
 import { CopyButton } from "./copy-button";
 import { isDatabaseConfigured } from "../../../db";
-import { findOrderBySessionHash, ORDER_STATUS } from "../../../lib/orders";
+import { findOrderForCookie, ORDER_STATUS } from "../../../lib/orders";
 import {
   CHECKOUT_COOKIE,
-  hashSessionSecret,
   isWellFormedSecret,
 } from "../../../lib/payment-session";
 import { productForPlan } from "../../../lib/robokassa";
@@ -26,7 +25,7 @@ async function loadOrder() {
   if (!isWellFormedSecret(secret)) return null;
 
   try {
-    const state = await findOrderBySessionHash(await hashSessionSecret(secret));
+    const state = await findOrderForCookie(secret);
     return state?.order.buyerType === "business" ? state.order : null;
   } catch (error) {
     console.error("[invoice] lookup failed", error instanceof Error ? error.message : error);
@@ -94,7 +93,7 @@ export default async function PaymentInvoicePage() {
       <Header />
       <section className="payment-page shell">
         <div className="payment-copy">
-          <Steps current={1} />
+          <Steps current={isPaid ? 2 : 1} />
           <p className="eyebrow">Оплата по счёту</p>
           <h1 className="invoice-heading">Оплата для ИП и организаций</h1>
           <p className="payment-lead">
@@ -131,10 +130,24 @@ export default async function PaymentInvoicePage() {
           {isPaid ? (
             <>
               <span className="price-name">Оплата получена</span>
-              <p>Доступ к анкете открыт в этом браузере.</p>
-              <a className="button button-primary full" href="/brief">
-                Заполнить профиль радара <span aria-hidden="true">→</span>
-              </a>
+              {/* A subscription renewal has no intake form, so it must not be
+                  sent to /brief — that page refuses the plan and the customer
+                  would hit a dead end. */}
+              {order.plan === "subscription" ? (
+                <>
+                  <p>Обслуживание продлено ещё на месяц. Новая анкета не нужна — профиль компании уже настроен.</p>
+                  <a className="button button-primary full" href="/payment/success">
+                    Открыть подтверждение <span aria-hidden="true">→</span>
+                  </a>
+                </>
+              ) : (
+                <>
+                  <p>Доступ к анкете открыт. Ссылку мы также отправили на {order.email}.</p>
+                  <a className="button button-primary full" href="/brief">
+                    Перейти к анкете <span aria-hidden="true">→</span>
+                  </a>
+                </>
+              )}
             </>
           ) : (
             <>

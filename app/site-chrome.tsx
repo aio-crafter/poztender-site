@@ -62,11 +62,24 @@ export function Steps({ current }: { current: 1 | 2 | 3 }) {
     <ol className="steps shell" aria-label="Шаги оформления">
       {STEP_LABELS.map((label, index) => {
         const step = index + 1;
-        const state = step === current ? "active" : step < current ? "done" : "";
+        const state = step < current ? "done" : step === current ? "active" : "upcoming";
         return (
-          <li key={label} className={`step ${state}`.trim()}>
-            <span className="step-num" aria-hidden="true">{step < current ? "✓" : step}</span>
+          <li
+            key={label}
+            className={`step ${state}`}
+            // Only the step the customer is on is the current one; done and
+            // upcoming steps must not claim it.
+            aria-current={state === "active" ? "step" : undefined}
+          >
+            <span className="step-num" aria-hidden="true">
+              {state === "done" ? "✓" : step}
+            </span>
             <span>{label}</span>
+            {/* State is carried in text as well as in colour and the tick, so
+                it survives for anyone who cannot see either. */}
+            <span className="visually-hidden">
+              {state === "done" ? " — выполнено" : state === "active" ? " — текущий шаг" : " — предстоит"}
+            </span>
           </li>
         );
       })}

@@ -3,9 +3,8 @@ import {
   createIntakeNotification,
   validateIntakeSubmission,
 } from "../../../lib/intake";
-import { claimGrant, findOrderBySessionHash, isGrantActive } from "../../../lib/orders";
+import { claimGrant, findOrderForCookie, isGrantActive } from "../../../lib/orders";
 import {
-  hashSessionSecret,
   readSessionSecret,
 } from "../../../lib/payment-session";
 import {
@@ -79,7 +78,7 @@ export async function POST(request: Request) {
 
   let state;
   try {
-    state = await findOrderBySessionHash(await hashSessionSecret(secret));
+    state = await findOrderForCookie(secret);
   } catch (error) {
     console.error("[intake] access lookup failed", error instanceof Error ? error.message : error);
     return json({ ok: false, error: "Сервис временно недоступен. Попробуйте ещё раз." }, 503);

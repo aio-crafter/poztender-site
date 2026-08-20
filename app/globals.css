@@ -312,6 +312,10 @@ nav a:hover { text-decoration: underline; }
 .step.active .step-num { background: var(--acid); border-color: var(--ink); color: var(--ink); }
 .step.done .step-num { background: var(--ink); border-color: var(--ink); color: var(--acid); }
 .step.done { color: var(--ink); }
+/* Upcoming is the quiet default; stated explicitly so the three states are
+   visible in one place rather than implied by absence. */
+.step.upcoming { color: var(--muted); opacity: .72; }
+.step.upcoming .step-num { border-style: dashed; }
 
 .char-counter { display: block; margin-top: 6px; text-align: right; color: var(--muted); font: 700 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .char-counter.limit { color: var(--red); }

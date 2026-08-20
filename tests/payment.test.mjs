@@ -459,13 +459,20 @@ test("a revoked entitlement closes the brief", async () => {
   assert.match(html, /Анкета доступна после оплаты/);
 });
 
-test("a spent entitlement closes the brief", async () => {
+test("a spent entitlement shows the completed state, not a demand to pay", async () => {
+  // Telling someone who has just sent their form to pay first reads as though
+  // their money vanished. The page must tell the three cases apart.
   const { fields, cookie } = await startCheckout();
   await payCallback(fields.InvId);
   await testDb.db.query("UPDATE access_grants SET used_at = now()");
 
   const html = await (await request("/brief", { cookie })).text();
-  assert.match(html, /Анкета доступна после оплаты/);
+  assert.match(html, /Анкета уже отправлена/);
+  assert.match(html, /Мы получили данные/);
+  assert.doesNotMatch(html, /Анкета доступна после оплаты/);
+  assert.doesNotMatch(html, /form class="brief-form"/);
+  // Step 3 is reached: two ticks and "Готово" as the current step.
+  assert.match(html, /step done[\s\S]*step done[\s\S]*step active/);
 });
 
 test("the retired URL-token scheme no longer opens anything", async () => {
@@ -1120,3 +1127,100 @@ test("no password ever reaches the browser", async () => {
     assert.doesNotMatch(await (await request(path, { cookie })).text(), secrets, path);
   }
 });
+
+// --- stepper states -------------------------------------------------------
+
+/** The three steps as rendered: done / active / upcoming, in order. */
+function stepStates(html) {
+  return [...html.matchAll(/class="step (done|active|upcoming)"/g)].map((m) => m[1]);
+}
+
+test("the invoice page steps forward once the bank transfer is confirmed", async () => {
+  const { cookie } = await startBusinessCheckout();
+  const [order] = await orderRows();
+
+  const awaiting = await (await request("/payment/invoice", { cookie })).text();
+  assert.deepEqual(stepStates(awaiting), ["active", "upcoming", "upcoming"]);
+  assert.match(awaiting, /Ожидает оплаты/);
+
+  await confirmBankPayment(String(order.invoice_id));
+
+  const paid = await (await request("/payment/invoice", { cookie })).text();
+  assert.deepEqual(stepStates(paid), ["done", "active", "upcoming"]);
+  assert.match(paid, /Оплата получена/);
+  assert.match(paid, /Перейти к анкете/);
+});
+
+test("a paid subscription invoice never points at the intake form", async () => {
+  const { cookie } = await startBusinessCheckout("&plan=subscription");
+  const [order] = await orderRows();
+  await confirmBankPayment(String(order.invoice_id));
+
+  const html = await (await request("/payment/invoice", { cookie })).text();
+  assert.match(html, /Оплата получена/);
+  assert.match(html, /Обслуживание продлено/);
+  assert.doesNotMatch(html, /href="\/brief"/, "a renewal must not be sent to a form it cannot use");
+});
+
+test("the success page steps forward once the callback lands", async () => {
+  const { fields, cookie } = await startCheckout();
+
+  const processing = await (await request("/payment/success", { cookie })).text();
+  assert.deepEqual(stepStates(processing), ["active", "upcoming", "upcoming"]);
+  assert.match(processing, /Платёж обрабатывается/);
+
+  await payCallback(fields.InvId);
+
+  const paid = await (await request("/payment/success", { cookie })).text();
+  assert.deepEqual(stepStates(paid), ["done", "active", "upcoming"]);
+  assert.match(paid, /Платёж подтверждён/);
+});
+
+test("a confirmed subscription shows the final step", async () => {
+  const { fields, cookie } = await startCheckout("plan=subscription&email=b%40example.ru");
+  await payCallback(fields.InvId, SUBSCRIPTION_AMOUNT);
+
+  const html = await (await request("/payment/success", { cookie })).text();
+  assert.deepEqual(stepStates(html), ["done", "done", "active"]);
+  assert.match(html, /Продление подтверждено/);
+});
+
+test("only the current step is marked as such for assistive technology", async () => {
+  const { cookie } = await startCheckout();
+  const html = await (await request("/payment/success", { cookie })).text();
+  assert.equal((html.match(/aria-current="step"/g) ?? []).length, 1);
+});
+
+test("submitting the intake advances to the final step and survives a refresh", async () => {
+  await withTelegram({}, async () => {
+    const { fields, cookie } = await startCheckout();
+    await payCallback(fields.InvId);
+
+    const open = await (await request("/brief", { cookie })).text();
+    assert.deepEqual(stepStates(open), ["done", "active", "upcoming"]);
+
+    const response = await request("/api/intake", {
+      cookie,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validIntake()),
+    });
+    assert.equal(response.status, 201);
+
+    // Refreshing is what used to destroy the completed state; now the server
+    // knows the grant was spent and says so.
+    for (let visit = 0; visit < 2; visit += 1) {
+      const done = await (await request("/brief", { cookie })).text();
+      assert.deepEqual(stepStates(done), ["done", "done", "active"]);
+      assert.match(done, /Анкета уже отправлена/);
+      assert.doesNotMatch(done, /Анкета доступна после оплаты/);
+    }
+  });
+});
+
+test("an unpaid visitor sees the payment-required state at step one", async () => {
+  const html = await (await request("/brief")).text();
+  assert.deepEqual(stepStates(html), ["active", "upcoming", "upcoming"]);
+  assert.match(html, /Анкета доступна после оплаты/);
+});
+
