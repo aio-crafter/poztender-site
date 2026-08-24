@@ -1,4 +1,4 @@
-import { accessEmailHtml, accessEmailSubject } from "./access-email.mjs";
+import { accessEmailHtml, accessEmailSubject, accessEmailText } from "./access-email.mjs";
 import { issueAccessLink, markAccessLinkSent } from "./access-links";
 import type { Order } from "../db/schema";
 import { sendMail } from "./smtp.mjs";
@@ -21,16 +21,18 @@ export async function deliverAccessEmail(order: Order, origin: string): Promise<
   if (!link) return "no-link";
 
   const url = `${origin.replace(/\/+$/, "")}/api/access?token=${link.token}`;
+  const content = {
+    invoiceId: String(order.invoiceId),
+    amount: order.expectedAmount,
+    plan: order.plan,
+    accessUntil: link.expiresAt,
+    url,
+  };
   const sent = await sendMail(env, {
     to: order.email,
     subject: accessEmailSubject(String(order.invoiceId)),
-    html: accessEmailHtml({
-      invoiceId: String(order.invoiceId),
-      amount: order.expectedAmount,
-      plan: order.plan,
-      accessUntil: link.expiresAt,
-      url,
-    }),
+    html: accessEmailHtml(content),
+    text: accessEmailText(content),
   });
 
   if (!sent) return "failed";

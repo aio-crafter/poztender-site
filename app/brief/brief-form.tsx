@@ -219,7 +219,7 @@ export function BriefForm() {
               onChange={() => setReplyChannel("telegram")}
             />
             <strong>Telegram</strong>
-            <small>Быстрее для уведомлений и уточнений</small>
+            <small>Ответим и уточним детали в Telegram</small>
           </label>
           <label className={replyChannel === "email" ? "selected" : ""}>
             <input

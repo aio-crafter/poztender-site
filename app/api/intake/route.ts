@@ -132,6 +132,8 @@ export async function POST(request: Request) {
         to: submission.email,
         company: submission.company,
         contactName: submission.contactName,
+        replyChannel: submission.replyChannel,
+        telegram: submission.telegram,
       });
     } catch (error) {
       console.error("[intake] confirmation email threw", error);

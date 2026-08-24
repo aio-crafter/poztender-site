@@ -1,4 +1,6 @@
-import { escapeHtml, isEmailReady, sendMail } from "./smtp.mjs";
+import { intakeEmailHtml, intakeEmailSubject, intakeEmailText } from "./intake-email.mjs";
+import type { ReplyChannel } from "./intake";
+import { isEmailReady, sendMail } from "./smtp.mjs";
 
 export interface EmailEnvironment {
   YANDEX_SMTP_USER?: string;
@@ -9,23 +11,13 @@ interface ConfirmationInput {
   to: string;
   company: string;
   contactName: string;
+  /** The channel the customer chose in the form; used for wording only. */
+  replyChannel: ReplyChannel;
+  /** The customer's Telegram contact, empty unless they chose that channel. */
+  telegram: string;
 }
 
 export { isEmailReady };
-
-function buildIntakeHtml(contactName: string, company: string) {
-  const safeName = escapeHtml(contactName || "коллеги");
-  const safeCompany = escapeHtml(company || "вашей компании");
-  return (
-    '<!doctype html><html><body style="font-family:Arial,sans-serif;color:#11130f;">' +
-    `<p>Здравствуйте, ${safeName}!</p>` +
-    `<p>Мы получили анкету для настройки тендерного радара АПС и СОУЭ для ${safeCompany}.</p>` +
-    "<p>Ответим выбранным способом связи в течение рабочего дня. Если появятся вопросы раньше — пишите в Telegram " +
-    '<a href="https://t.me/kruger79">@kruger79</a> или на этот email.</p>' +
-    "<p>— Команда ПожТендер</p>" +
-    "</body></html>"
-  );
-}
 
 /**
  * Best-effort confirmation to the customer after their intake is delivered.
@@ -35,9 +27,16 @@ export async function sendIntakeConfirmationEmail(
   env: EmailEnvironment,
   input: ConfirmationInput,
 ): Promise<boolean> {
+  const content = {
+    contactName: input.contactName,
+    company: input.company,
+    replyChannel: input.replyChannel,
+    telegram: input.telegram,
+  };
   return sendMail(env, {
     to: input.to,
-    subject: "Анкета получена — ПожТендер",
-    html: buildIntakeHtml(input.contactName, input.company),
+    subject: intakeEmailSubject(),
+    html: intakeEmailHtml(content),
+    text: intakeEmailText(content),
   });
 }

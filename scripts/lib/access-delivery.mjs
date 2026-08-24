@@ -6,7 +6,7 @@
 // modules the app uses, so the customer receives an identical message either
 // way. tests/access-delivery.test.mjs pins the two implementations together.
 import { createHash, randomBytes } from "node:crypto";
-import { accessEmailHtml, accessEmailSubject } from "../../lib/access-email.mjs";
+import { accessEmailHtml, accessEmailSubject, accessEmailText } from "../../lib/access-email.mjs";
 import { sendMail } from "../../lib/smtp.mjs";
 
 export function createAccessToken() {
@@ -56,16 +56,18 @@ export async function deliverAccessEmail(client, order, origin) {
   if (!link) return "no-link";
 
   const url = `${String(origin).replace(/\/+$/, "")}/api/access?token=${link.token}`;
+  const content = {
+    invoiceId: String(order.invoice_id),
+    amount: order.expected_amount,
+    plan: order.plan,
+    accessUntil: link.expiresAt,
+    url,
+  };
   const sent = await sendMail(env, {
     to: order.email,
     subject: accessEmailSubject(String(order.invoice_id)),
-    html: accessEmailHtml({
-      invoiceId: String(order.invoice_id),
-      amount: order.expected_amount,
-      plan: order.plan,
-      accessUntil: link.expiresAt,
-      url,
-    }),
+    html: accessEmailHtml(content),
+    text: accessEmailText(content),
   });
   if (!sent) return "failed";
 
