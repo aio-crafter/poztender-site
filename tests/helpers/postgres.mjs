@@ -34,7 +34,9 @@ export async function startTestDatabase(port) {
     db,
     url: `postgresql://postgres:postgres@127.0.0.1:${port}/postgres`,
     async reset() {
-      await db.exec("TRUNCATE access_grants, orders RESTART IDENTITY CASCADE;");
+      await db.exec(
+        "TRUNCATE intake_submissions, access_grants, orders RESTART IDENTITY CASCADE;",
+      );
     },
     async stop() {
       await server.stop();

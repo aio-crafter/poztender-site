@@ -118,6 +118,61 @@ export const accessLinks = pgTable("access_links", {
   sentAt: timestamp("sent_at", { withTimezone: true }),
 });
 
+/**
+ * The intake form a paying customer filled in.
+ *
+ * This table is what makes "the form was accepted" a fact about the database
+ * rather than about whether Telegram and SMTP happened to be reachable. It is
+ * written in the same transaction that spends the grant, so a submission and a
+ * spent entitlement are created together or not at all.
+ *
+ * `orderId` and `grantId` are both UNIQUE: "one paid order, one submission" is
+ * enforced by the database, so a double click or two concurrent requests can
+ * never produce two rows no matter what the application code does.
+ *
+ * The two `*NotifiedAt` columns record delivery, not acceptance. NULL means
+ * the owner or the customer has not been told yet — the submission is stored
+ * regardless, and scripts/resend-intake-notifications.mjs retries from here.
+ */
+export const intakeSubmissions = pgTable(
+  "intake_submissions",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .notNull()
+      .unique()
+      .references(() => orders.id),
+    grantId: integer("grant_id")
+      .notNull()
+      .unique()
+      .references(() => accessGrants.id),
+    company: text("company").notNull(),
+    inn: text("inn").notNull(),
+    contactName: text("contact_name").notNull(),
+    email: text("email").notNull(),
+    // Empty unless the customer chose Telegram as the reply channel.
+    telegram: text("telegram").notNull().default(""),
+    // Where the person answering should reply. It never causes an automated
+    // message to the customer: a bot cannot open a chat from a @username.
+    replyChannel: text("reply_channel").notNull(),
+    regions: text("regions").notNull(),
+    workTypes: text("work_types").notNull(),
+    budget: text("budget").notNull().default(""),
+    licenses: text("licenses").notNull().default(""),
+    exclusions: text("exclusions").notNull().default(""),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+    telegramNotifiedAt: timestamp("telegram_notified_at", { withTimezone: true }),
+    emailNotifiedAt: timestamp("email_notified_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "intake_submissions_reply_channel",
+      sql`${table.replyChannel} IN ('telegram', 'email')`,
+    ),
+  ],
+);
+
 export type Order = typeof orders.$inferSelect;
+export type IntakeSubmission = typeof intakeSubmissions.$inferSelect;
 export type AccessLink = typeof accessLinks.$inferSelect;
 export type AccessGrant = typeof accessGrants.$inferSelect;

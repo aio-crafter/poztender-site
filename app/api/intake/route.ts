@@ -3,7 +3,11 @@ import {
   createIntakeNotification,
   validateIntakeSubmission,
 } from "../../../lib/intake";
-import { claimGrant, findSelectedOrder, isGrantActive } from "../../../lib/orders";
+import { findSelectedOrder, isGrantActive } from "../../../lib/orders";
+import {
+  markIntakeNotified,
+  storeIntakeSubmission,
+} from "../../../lib/intake-submissions";
 import {
   readOrderSelectorFromHeader,
   readSessionSecret,
@@ -13,7 +17,6 @@ import {
   type EmailEnvironment,
 } from "../../../lib/email";
 import {
-  hasTelegramToken,
   sendOwnerMessage,
   type TelegramEnvironment,
 } from "../../../lib/telegram";
@@ -102,13 +105,30 @@ export async function POST(request: Request) {
   // the closure below, and this keeps the value correctly typed there.
   const submission = validation.data;
 
-  const env = process.env as TelegramEnvironment;
-  if (!hasTelegramToken(env)) {
-    console.error("[intake] TELEGRAM_BOT_TOKEN is missing or malformed");
+  // The form is accepted by PostgreSQL, before any external system is
+  // touched. Telegram and SMTP used to gate this response, so an unreachable
+  // relay told a paying customer their submission had failed while their data
+  // existed nowhere. Delivery is now a retryable side effect of a fact that is
+  // already committed.
+  let stored;
+  try {
+    stored = await storeIntakeSubmission({
+      orderId: state.order.id,
+      grantId: state.grant!.id,
+      data: submission,
+    });
+  } catch (error) {
+    // The database is the one dependency that may refuse the form: without it
+    // the answers exist nowhere, so the customer must be asked to retry.
+    console.error("[intake] could not store submission", error instanceof Error ? error.message : error);
     return json({
       ok: false,
-      error: "Канал приёма анкет временно настраивается. Данные не отправлены — воспользуйтесь контактом ниже.",
+      error: "Не удалось сохранить анкету. Данные не потеряны в форме — попробуйте ещё раз.",
     }, 503);
+  }
+
+  if (stored.outcome === "already-submitted") {
+    return json({ ok: false, error: "Эта оплаченная анкета уже была отправлена." }, 409);
   }
 
   const notification = createIntakeNotification(
@@ -121,46 +141,42 @@ export async function POST(request: Request) {
     },
   );
 
-  // Spending the grant only after delivery succeeds keeps a transient Telegram
-  // failure from burning a paid customer's single submission. The conditional
-  // UPDATE inside claimGrant makes the write itself safe to race.
-  const grantId = state.grant!.id;
-
-  async function notifyByEmail() {
-    try {
-      await sendIntakeConfirmationEmail(process.env as EmailEnvironment, {
-        to: submission.email,
-        company: submission.company,
-        contactName: submission.contactName,
-        replyChannel: submission.replyChannel,
-        telegram: submission.telegram,
-      });
-    } catch (error) {
+  // Independent on purpose: neither channel can fail the other, and neither
+  // can fail the response. Nothing here throws out of the handler.
+  const [telegram, email] = await Promise.all([
+    sendOwnerMessage(process.env as TelegramEnvironment, notification, "[intake]").catch((error) => {
+      console.error("[intake] owner notification threw", error);
+      return { ok: false as const, reason: "request-failed" as const };
+    }),
+    sendIntakeConfirmationEmail(process.env as EmailEnvironment, {
+      to: submission.email,
+      company: submission.company,
+      contactName: submission.contactName,
+      replyChannel: submission.replyChannel,
+      telegram: submission.telegram,
+    }).catch((error) => {
       console.error("[intake] confirmation email threw", error);
-    }
+      return false;
+    }),
+  ]);
+
+  if (!telegram.ok) {
+    // Loud, because the owner does not yet know a paid customer is waiting.
+    // The submission is stored: `npm run resend-intake` delivers it later.
+    console.error(
+      `[intake] submission ${stored.submission.id} stored but not delivered to the owner (${telegram.reason})`,
+    );
+  }
+  if (!email) {
+    console.error(`[intake] submission ${stored.submission.id} stored but no confirmation email was sent`);
   }
 
-  const delivery = await sendOwnerMessage(env, notification, "[intake]");
-  if (!delivery.ok) {
-    if (delivery.reason === "no-chat-id") {
-      return json({
-        ok: false,
-        error: "Канал приёма анкет ждёт активации. Владелец должен один раз отправить боту /start.",
-      }, 503);
-    }
-    if (delivery.reason === "request-failed") {
-      return json({
-        ok: false,
-        error: "Не удалось доставить анкету. Данные не потеряны в форме — попробуйте ещё раз.",
-      }, 502);
-    }
-    return json({
-      ok: false,
-      error: "Канал уведомлений временно недоступен. Попробуйте ещё раз или воспользуйтесь контактом ниже.",
-    }, 502);
+  try {
+    await markIntakeNotified(stored.submission.id, { telegram: telegram.ok, email });
+  } catch (error) {
+    // A missing stamp only means the retry script will offer it again.
+    console.error("[intake] could not record notification state", error instanceof Error ? error.message : error);
   }
 
-  await claimGrant(grantId);
-  await notifyByEmail();
   return json({ ok: true }, 201);
 }

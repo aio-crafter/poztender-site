@@ -1073,13 +1073,18 @@ test("a paid intake still reaches the owner through the shared sender", async ()
     assert.match(text, /Новая анкета/);
     assert.match(text, new RegExp(fields.InvId));
 
-    // The entitlement is spent only once delivery succeeded.
+    // The entitlement is spent by the transaction that stored the form, not
+    // by the delivery that follows it.
     const [grant] = await grantRows();
     assert.ok(grant.used_at);
   });
 });
 
-test("a failed intake delivery reports an error and does not spend the entitlement", async () => {
+test("a failed intake delivery still accepts the form", async () => {
+  // The inverse of the old contract, and deliberately so: delivery used to
+  // gate acceptance, so an unreachable relay told a paying customer their
+  // submission had failed while their answers existed nowhere. Acceptance is
+  // now decided by the transaction that stores the form.
   await withTelegram({ ok: false }, async (telegram) => {
     const { fields, cookie } = await startCheckout();
     await payCallback(fields.InvId);
@@ -1090,11 +1095,15 @@ test("a failed intake delivery reports an error and does not spend the entitleme
       headers: { "content-type": "application/json" },
       body: JSON.stringify(validIntake()),
     });
-    assert.equal(response.status, 502);
+    assert.equal(response.status, 201);
     assert.equal(telegram.calls.length, 1);
 
+    const [stored] = await rows("SELECT * FROM intake_submissions");
+    assert.ok(stored, "the form must be stored even though delivery failed");
+    assert.equal(stored.telegram_notified_at, null, "an undelivered form stays unstamped");
+
     const [grant] = await grantRows();
-    assert.equal(grant.used_at, null, "a paid customer must be able to retry");
+    assert.ok(grant.used_at, "the entitlement is spent by the storing transaction");
   });
 });
 
