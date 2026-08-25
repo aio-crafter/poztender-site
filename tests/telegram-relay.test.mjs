@@ -310,3 +310,114 @@ test("the success path logs nothing at all", async () => {
   assert.equal(result.status, 201);
   assert.deepEqual(result.logs, []);
 });
+
+// --- the application's own transport order --------------------------------
+//
+// Production reported "submission stored but not delivered to owner
+// (request-failed)" after the transport moved from lib/telegram.ts into
+// lib/telegram.mjs. `request-failed` is reachable only from the direct
+// Telegram call, so these pin what the extraction had to preserve: the three
+// relay variables are still read, and the relay is still tried first.
+
+import { sendOwnerMessage } from "../lib/telegram.mjs";
+
+const APP_RELAY_URL = "https://relay.example/api/telegram-relay";
+
+async function withOrderedFetch(behaviour, body) {
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (!url.startsWith("https://relay.example") && !url.includes("api.telegram.org")) {
+      return original(input, init);
+    }
+    const kind = url.startsWith("https://relay.example") ? "relay" : "direct";
+    seen.push({ kind, headers: init?.headers ?? {} });
+    if (kind === "relay") {
+      if (behaviour === "relay-delivers") return new Response(JSON.stringify({ ok: true }), { status: 201 });
+      return new Response(JSON.stringify({ ok: false, reason: "no-chat-id" }), { status: 503 });
+    }
+    throw new Error("network is down");
+  };
+  try {
+    return await body(seen);
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+const appEnv = (extra = {}) => ({
+  TELEGRAM_BOT_TOKEN: BOT_TOKEN,
+  TELEGRAM_OWNER_CHAT_ID: CONFIGURED_CHAT_ID,
+  TELEGRAM_RELAY_URL: APP_RELAY_URL,
+  TELEGRAM_RELAY_SECRET: RELAY_SECRET,
+  ...extra,
+});
+
+test("the relay is tried before the direct Telegram API", async () => {
+  await withOrderedFetch("relay-delivers", async (seen) => {
+    const delivery = await sendOwnerMessage(appEnv(), "анкета", "[test]");
+
+    assert.deepEqual(delivery, { ok: true, via: "relay" });
+    assert.deepEqual(seen.map((call) => call.kind), ["relay"], "a working relay ends the attempt");
+  });
+});
+
+test("all three relay variables are still read by the .mjs transport", async () => {
+  await withOrderedFetch("relay-delivers", async (seen) => {
+    await sendOwnerMessage(appEnv({ TELEGRAM_RELAY_AUTH_TOKEN: "deployment-bypass" }), "анкета", "[test]");
+
+    const [relayCall] = seen;
+    assert.equal(relayCall.headers.authorization, `Bearer ${RELAY_SECRET}`, "TELEGRAM_RELAY_SECRET");
+    assert.equal(relayCall.headers["x-telegram-bot-token"], BOT_TOKEN, "TELEGRAM_BOT_TOKEN");
+    assert.equal(
+      relayCall.headers["OAI-Sites-Authorization"],
+      "Bearer deployment-bypass",
+      "TELEGRAM_RELAY_AUTH_TOKEN",
+    );
+  });
+});
+
+test("a failing relay falls through to direct, in that order", async () => {
+  await withOrderedFetch("relay-refuses", async (seen) => {
+    const delivery = await sendOwnerMessage(appEnv(), "анкета", "[test]");
+
+    assert.deepEqual(seen.map((call) => call.kind), ["relay", "direct"], "relay first, direct second");
+    assert.deepEqual(delivery, { ok: false, reason: "request-failed" });
+  });
+});
+
+test("an unconfigured relay is reported instead of silently skipped", async () => {
+  // The state behind the production report: with no https URL or a secret
+  // under 32 characters the relay is skipped, and until now that left no
+  // trace at all — the log showed only the direct call's request-failed.
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.map(String).join(" "));
+  try {
+    await withOrderedFetch("relay-delivers", async (seen) => {
+      const delivery = await sendOwnerMessage(
+        appEnv({ TELEGRAM_RELAY_URL: undefined, TELEGRAM_RELAY_SECRET: undefined }),
+        "анкета",
+        "[test]",
+      );
+
+      assert.deepEqual(seen.map((call) => call.kind), ["direct"], "the relay is never called");
+      assert.deepEqual(delivery, { ok: false, reason: "request-failed" });
+    });
+    assert.ok(
+      logs.some((line) => line.includes("telegram relay is not configured")),
+      "the skipped relay must be visible in the log",
+    );
+    for (const line of logs) assert.ok(!line.includes(RELAY_SECRET) && !line.includes(BOT_TOKEN));
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("a too-short relay secret is treated as unconfigured, not sent", async () => {
+  await withOrderedFetch("relay-delivers", async (seen) => {
+    await sendOwnerMessage(appEnv({ TELEGRAM_RELAY_SECRET: "short" }), "анкета", "[test]");
+    assert.deepEqual(seen.map((call) => call.kind), ["direct"], "a short secret must not be sent");
+  });
+});

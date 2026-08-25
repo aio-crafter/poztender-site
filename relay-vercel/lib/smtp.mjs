@@ -1,46 +1,22 @@
-// Minimal dependency-free SMTP transport, shared by the application and the
-// administrative scripts.
+// Minimal dependency-free SMTP transport for the relay deployment.
 //
-// Written in plain JavaScript on purpose: the CLI tools under scripts/ run
-// straight from source with no build step, and duplicating an SMTP client
-// between them and the bundled app would be worse than this one shared file.
+// A deliberate copy of lib/smtp.mjs. The relay is deployed on its own from
+// relay-vercel/, so it cannot import a module that lives above its project
+// root, and adding a build step to copy one in would be worse than a file the
+// two can be diffed against. tests/email-relay.test.mjs pins the two
+// implementations together: both must produce byte-identical MIME.
 //
-// The project cannot add npm dependencies (the Docker build runs `npm ci`
-// against a pinned lockfile), so this speaks just enough SMTP over node:tls
-// instead of pulling in nodemailer.
+// This copy carries the direct SMTP transport only. It must never learn about
+// EMAIL_RELAY_URL — a relay that relays to itself is a loop.
 import { randomBytes } from "node:crypto";
 import { connect } from "node:tls";
 
 const SMTP_HOST = "smtp.yandex.ru";
 const SMTP_PORT = 465;
 const SMTP_TIMEOUT_MS = 10_000;
-// The relay does the SMTP conversation itself, so this allows for that plus
-// the round trip, and still fails long before a customer gives up on a form.
-const RELAY_TIMEOUT_MS = 15_000;
 
-/**
- * True when this host can send at all, by either transport.
- *
- * A host behind the relay holds no SMTP password on purpose, so checking the
- * mailbox credentials alone would report "not configured" on exactly the
- * deployment that works.
- */
 export function isEmailReady(env) {
-  return isEmailRelayConfigured(env) || Boolean(env.YANDEX_SMTP_USER && env.YANDEX_SMTP_PASSWORD);
-}
-
-/**
- * Whether outgoing mail goes over HTTPS to the relay.
- *
- * Timeweb times out on smtp.yandex.ru:465 and :587 alike, so on that host the
- * relay is the only transport that works. Both halves are required: a URL
- * without a long enough secret would send an unauthenticated request.
- */
-export function isEmailRelayConfigured(env) {
-  return (
-    /^https:\/\/[^\s]+$/.test(env.EMAIL_RELAY_URL ?? "") &&
-    (env.EMAIL_RELAY_SECRET ?? "").length >= 32
-  );
+  return Boolean(env.YANDEX_SMTP_USER && env.YANDEX_SMTP_PASSWORD);
 }
 
 export function escapeHtml(value) {
@@ -166,14 +142,17 @@ export function buildMessage(from, to, subject, { html, text } = {}) {
 }
 
 /**
- * Speaks SMTP directly to Yandex. Used for local development, the
- * administrative CLIs and the diagnostic script — anywhere the port is
- * actually reachable.
+ * Sends one message. Resolves to true on success and false on any failure —
+ * callers decide what a failure means, and none of them may treat it as a
+ * reason to undo money that has already arrived.
  *
  * Nothing here logs the password, the recipient's message body or the token
  * that may be inside it.
  */
-async function sendDirect(env, { to, subject, html, text }) {
+export async function sendMail(env, { to, subject, html, text }) {
+  if (!isEmailReady(env)) return false;
+  if (!isEmailAddress(to)) return false;
+
   const user = env.YANDEX_SMTP_USER;
   const password = env.YANDEX_SMTP_PASSWORD;
 
@@ -222,53 +201,4 @@ async function sendDirect(env, { to, subject, html, text }) {
 
   const timeout = new Promise((resolve) => setTimeout(() => resolve(false), SMTP_TIMEOUT_MS));
   return Promise.race([task, timeout]);
-}
-
-/**
- * Hands the message to the relay over HTTPS. The relay owns the mailbox
- * credentials and builds both the envelope sender and the From header itself,
- * so nothing secret leaves this host.
- */
-async function sendThroughRelay(env, { to, subject, html, text }) {
-  try {
-    const response = await fetch(env.EMAIL_RELAY_URL, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.EMAIL_RELAY_SECRET}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ to, subject, text: text ?? "", html: html ?? "" }),
-      signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
-    });
-    if (response.ok) return true;
-
-    // The relay answers failures with a safe label and no message content.
-    const detail = await response.json().catch(() => ({}));
-    const reason = typeof detail.reason === "string" ? detail.reason : "unknown";
-    console.error(`[email] relay refused the message: status ${response.status} reason=${reason}`);
-    return false;
-  } catch (error) {
-    // Name only: the message can quote the request.
-    console.error(`[email] relay request failed: ${error?.name ?? "Error"}`);
-    return false;
-  }
-}
-
-/**
- * Sends one message by whichever transport this host has. Resolves to true on
- * success and false on any failure — callers decide what a failure means, and
- * none of them may treat it as a reason to undo money that has already
- * arrived, or to reject an intake form that is already stored.
- *
- * When the relay is configured it is the only transport: falling back to a
- * direct connection would spend ten seconds timing out on a port the host has
- * already been proven unable to reach, and would do it on every message.
- */
-export async function sendMail(env, { to, subject, html, text }) {
-  if (!isEmailReady(env)) return false;
-  if (!isEmailAddress(to)) return false;
-
-  return isEmailRelayConfigured(env)
-    ? sendThroughRelay(env, { to, subject, html, text })
-    : sendDirect(env, { to, subject, html, text });
 }

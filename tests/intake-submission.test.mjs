@@ -399,3 +399,50 @@ test("the database refuses a reply channel it does not know", async () => {
     /intake_submissions_reply_channel|violates/i,
   );
 });
+
+// --- the email relay cannot reject an accepted form -----------------------
+
+test("a failing email relay leaves the submission stored", async () => {
+  // Timeweb reaches Yandex over HTTPS through the relay, not over SMTP. If
+  // that relay is down the confirmation is simply undelivered — it must not
+  // reach back into a form the database has already accepted.
+  const previous = {
+    url: process.env.EMAIL_RELAY_URL,
+    secret: process.env.EMAIL_RELAY_SECRET,
+  };
+  process.env.EMAIL_RELAY_URL = "https://relay.example/api/email-relay";
+  process.env.EMAIL_RELAY_SECRET = "e".repeat(40);
+
+  const originalFetch = globalThis.fetch;
+  const relayCalls = [];
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.startsWith("https://relay.example")) {
+      relayCalls.push(url);
+      return new Response(JSON.stringify({ ok: false, reason: "smtp-failed" }), { status: 502 });
+    }
+    if (url.includes("api.telegram.org")) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const { cookie, invoiceId } = await paidOrder();
+    const stored = await assertAccepted(await submit(cookie), invoiceId);
+
+    assert.equal(relayCalls.length, 1, "the email relay was tried");
+    assert.equal(stored.email_notified_at, null, "a refused relay leaves the stamp unset");
+    assert.ok(stored.telegram_notified_at, "the other channel is unaffected");
+    assert.equal((await submissionRows()).length, 1, "the form stands");
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of [
+      ["EMAIL_RELAY_URL", previous.url],
+      ["EMAIL_RELAY_SECRET", previous.secret],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
