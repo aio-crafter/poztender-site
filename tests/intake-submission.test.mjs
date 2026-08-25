@@ -18,7 +18,10 @@ const ORIGIN = "https://poztender.example";
 const PASSWORD_2 = "fake-password-two";
 const PILOT_AMOUNT = "4900.00";
 const BOT_TOKEN = `123456789:${"A".repeat(35)}`;
-const DB_PORT = 55_432 + (process.pid % 200);
+// Its own port band: every DB-backed test file gets a disjoint 200-port
+// range, because two files sharing one collide whenever their pids are
+// congruent mod 200 and the suite fails in bulk.
+const DB_PORT = 56_300 + (process.pid % 200);
 
 let testDb;
 let worker;

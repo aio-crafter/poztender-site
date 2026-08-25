@@ -154,14 +154,30 @@ export async function createPaymentSignature(input: {
   successUrl: string;
   failUrl: string;
 }) {
+  // Robokassa's documented base for a payment that carries both a receipt and
+  // per-request redirect URLs:
+  //
+  //   MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method
+  //     :FailUrl2:FailUrl2Method:Password#1
+  //
+  // Every URL-shaped value in it is percent-encoded. Their own worked example
+  // reads `…:https%3A%2F%2Frobokassa.com%2F:GET:https%3A%2F%2Fwww.google.com%2F
+  // :GET:password1`, and the receipt in the same line is percent-encoded too —
+  // which is why createReceipt already returns an encoded string and is passed
+  // through unchanged here. Signing the two URLs raw produced error 29,
+  // "invalid SignatureValue", on live checkout.
+  //
+  // The hidden form fields stay raw: the browser percent-encodes them once
+  // when it submits application/x-www-form-urlencoded, so the encoding belongs
+  // to the transport there and to this string here.
   const signatureBase = [
     input.merchantLogin,
     input.amount,
     input.invoiceId,
     input.receipt,
-    input.successUrl,
+    encodeURIComponent(input.successUrl),
     "GET",
-    input.failUrl,
+    encodeURIComponent(input.failUrl),
     "GET",
     input.password,
   ].join(":");
