@@ -2,10 +2,24 @@ import { sha256Hex } from "./robokassa";
 
 export const CHECKOUT_COOKIE = "poztender_checkout";
 
-// The cookie has to outlive the round trip to Robokassa and the customer
-// coming back later to fill in the brief, so it matches the pilot access
-// window rather than the browser session.
-export const CHECKOUT_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+/**
+ * Names which order the browser is currently working on.
+ *
+ * Deliberately NOT a credential: it holds the public invoice number, and on its
+ * own it opens nothing. Every lookup pairs it with CHECKOUT_COOKIE and returns
+ * an order only when that order also belongs to the session. Its job is to
+ * remove ambiguity — a browser can own several orders, and guessing which one
+ * is "current" by status or recency is exactly what went wrong before.
+ */
+export const ORDER_COOKIE = "poztender_order";
+
+// The cookie identifies a browser; it never proves payment, so its lifetime is
+// deliberately generous. It must comfortably outlive the longest access window
+// (30 days for a subscription, counted from payment rather than from checkout),
+// because a bank transfer can be confirmed days after the order was created.
+// Access itself is still bounded by access_grants, which the server checks on
+// every request.
+export const CHECKOUT_COOKIE_MAX_AGE = 45 * 24 * 60 * 60;
 
 /**
  * A checkout session secret. 32 bytes from the platform CSPRNG — the order id
@@ -33,10 +47,16 @@ export function isWellFormedSecret(value: string | undefined | null): value is s
   return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
-export function buildSetCookie(secret: string, options?: { secure?: boolean }) {
+export function buildSetCookie(
+  secret: string,
+  options?: { secure?: boolean; maxAgeSeconds?: number },
+) {
   // Secure is dropped only for plain-HTTP local development, where the browser
   // would otherwise refuse the cookie outright.
   const secure = options?.secure ?? true;
+  // A recovery passes the grant's remaining lifetime so the restored session
+  // cannot expire before the access it restores.
+  const maxAge = Math.max(60, Math.round(options?.maxAgeSeconds ?? CHECKOUT_COOKIE_MAX_AGE));
   return [
     `${CHECKOUT_COOKIE}=${secret}`,
     "Path=/",
@@ -45,9 +65,48 @@ export function buildSetCookie(secret: string, options?: { secure?: boolean }) {
     // top-level GET redirect, and Strict would withhold the cookie on exactly
     // that navigation.
     "SameSite=Lax",
-    `Max-Age=${CHECKOUT_COOKIE_MAX_AGE}`,
+    `Max-Age=${maxAge}`,
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+}
+
+/** The selector cookie. Public value, so it is not marked as a secret anywhere. */
+export function buildOrderCookie(
+  invoiceId: string,
+  options?: { secure?: boolean; maxAgeSeconds?: number },
+) {
+  const secure = options?.secure ?? true;
+  const maxAge = Math.max(60, Math.round(options?.maxAgeSeconds ?? CHECKOUT_COOKIE_MAX_AGE));
+  return [
+    `${ORDER_COOKIE}=${invoiceId}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function readCookie(cookieHeader: string | null | undefined, name: string) {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim();
+  }
+  return null;
+}
+
+/** Reads the selected invoice number. Shape only — ownership is checked in SQL. */
+export function readOrderSelector(value: string | null | undefined) {
+  if (typeof value !== "string" || !/^\d{1,19}$/.test(value)) return null;
+  const invoiceId = Number(value);
+  return Number.isSafeInteger(invoiceId) && invoiceId > 0 ? invoiceId : null;
+}
+
+export function readOrderSelectorFromHeader(cookieHeader: string | null | undefined) {
+  return readOrderSelector(readCookie(cookieHeader, ORDER_COOKIE));
 }
 
 /** Reads the checkout secret out of a raw Cookie header. */
@@ -62,3 +121,25 @@ export function readSessionSecret(cookieHeader: string | null | undefined) {
   }
   return null;
 }
+
+/**
+ * A recovery token: 32 bytes from the platform CSPRNG, base64url — the same
+ * strength as a checkout secret, and likewise stored only as a hash.
+ *
+ * It is not a credential for an order, it is a pointer to one. It resolves only
+ * to an order that is already paid, it expires with the access it restores, and
+ * everything downstream still requires a live access_grant.
+ */
+export function createAccessToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+/** Namespaced separately from the checkout secret so the two can never collide. */
+export function hashAccessToken(token: string) {
+  return sha256Hex(`poztender-access-link:${token}`);
+}
+

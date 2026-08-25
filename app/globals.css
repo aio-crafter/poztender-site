@@ -178,9 +178,8 @@ nav a:hover { text-decoration: underline; }
 .checkout-card > p { color: #aeb2a7; font-size: 13px; }
 .checkout-card .button { margin-top: 20px; }
 .checkout-form { margin-top: 26px; }
-.checkout-form label { display: grid; gap: 9px; color: #d6d8d1; font-size: 13px; font-weight: 700; }
-.checkout-form input { width: 100%; min-height: 48px; padding: 11px 13px; border: 1px solid #555a4f; border-radius: var(--radius); background: #20231d; color: white; }
-.checkout-form input::placeholder { color: #858a7e; }
+/* Text-field styling moved to .checkout-field: a blanket `.checkout-form input`
+   rule also hit the radio inputs and stretched them to 48px full-width circles. */
 .checkout-consent { margin-top: 22px; line-height: 1.55; }
 .checkout-consent a { color: white; }
 .provider-note { display: flex; gap: 12px; margin-top: 26px; padding-top: 20px; border-top: 1px solid #383b34; color: #aeb2a7; font-size: 12px; }
@@ -313,6 +312,10 @@ nav a:hover { text-decoration: underline; }
 .step.active .step-num { background: var(--acid); border-color: var(--ink); color: var(--ink); }
 .step.done .step-num { background: var(--ink); border-color: var(--ink); color: var(--acid); }
 .step.done { color: var(--ink); }
+/* Upcoming is the quiet default; stated explicitly so the three states are
+   visible in one place rather than implied by absence. */
+.step.upcoming { color: var(--muted); opacity: .72; }
+.step.upcoming .step-num { border-style: dashed; }
 
 .char-counter { display: block; margin-top: 6px; text-align: right; color: var(--muted); font: 700 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .char-counter.limit { color: var(--red); }
@@ -323,3 +326,104 @@ nav a:hover { text-decoration: underline; }
 .draft-note button { border: none; background: none; padding: 0; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; color: inherit; }
 
 .checkout-error { margin: 0 0 20px; padding: 12px 14px; background: #3a1712; border: 1px solid var(--red); color: #ffcabf; font-size: 13px; }
+
+/* ---- payment: buyer type, invoice ------------------------------------- */
+
+/* Shared helpers. Monospace is reserved for numbers that get read out or
+   typed into a bank form, never for prose. */
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* The checkout form previously styled *every* input, which stretched the radio
+   buttons to full width and 48px tall. Text fields now opt in by class. */
+.checkout-field { display: grid; gap: 9px; margin-top: 18px; color: #d6d8d1; font-size: 13px; font-weight: 700; }
+.checkout-field > span:first-child { color: #d6d8d1; }
+.checkout-field input { width: 100%; min-height: 48px; padding: 11px 13px; border: 1px solid #555a4f; border-radius: var(--radius); background: #20231d; color: white; }
+.checkout-field input::placeholder { color: #858a7e; }
+.checkout-field .mono-input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .02em; }
+.checkout-form .field-hint { color: #9da096; font-weight: 500; }
+
+.buyer-choice { margin: 0; padding: 0; border: 0; }
+.buyer-choice legend { padding: 0; margin-bottom: 10px; color: #aeb2a7; font: 700 11px/1 ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+.buyer-options { display: grid; gap: 10px; }
+.buyer-option {
+  position: relative;
+  display: grid; grid-template-columns: 20px 1fr; align-items: start; gap: 12px;
+  padding: 15px 16px;
+  border: 1px solid #4a4e44; border-radius: var(--radius);
+  background: #191c16; cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+.buyer-option:hover { border-color: #7d8375; background: #1e2119; }
+/* The real radio stays in the DOM for semantics and keyboard use; only its
+   default appearance is removed. */
+.buyer-option input { position: absolute; opacity: 0; width: 20px; height: 20px; margin: 0; inset: 15px auto auto 16px; }
+.buyer-option-mark {
+  display: grid; place-items: center; width: 20px; height: 20px; margin-top: 1px;
+  border: 1px solid #7d8375; border-radius: 50%;
+  color: var(--ink); font-size: 12px; font-weight: 800; line-height: 1;
+}
+.buyer-option-body { display: grid; gap: 3px; min-width: 0; }
+.buyer-option strong { color: #eceee8; font-size: 15px; line-height: 1.3; }
+.buyer-option small { color: #9da096; font-size: 12px; font-weight: 500; line-height: 1.4; }
+.buyer-option-method { color: #7f8478; }
+.buyer-option.selected { border-color: var(--acid); background: rgba(216,255,62,.07); }
+.buyer-option.selected .buyer-option-mark { border-color: var(--acid); background: var(--acid); }
+.buyer-option.selected strong { color: white; }
+.buyer-option.selected small { color: #b9bdb1; }
+.buyer-option:has(input:focus-visible) { outline: 3px solid var(--amber); outline-offset: 3px; }
+
+.buyer-fields { display: grid; animation: buyer-fields-in .18s ease-out; }
+@keyframes buyer-fields-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.buyer-note { margin: 14px 0 0; color: #9da096; font-size: 12px; line-height: 1.5; }
+.checkout-card .button.full { width: 100%; margin-top: 22px; }
+
+/* ---- invoice page ----------------------------------------------------- */
+
+/* The default page heading clamp is tuned for two short words; this title is
+   five, so it needs its own scale to stay at two or three lines. */
+.payment-copy h1.invoice-heading { font-size: clamp(30px, 3.4vw, 46px); line-height: 1.04; letter-spacing: -.04em; max-width: 15ch; }
+
+.status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: #fff6dd; font-size: 12px; font-weight: 750; }
+.status-pill .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.status-pill.paid { background: #eaffc2; }
+.status-pill.paid .status-dot { background: var(--acid-dark); }
+
+.invoice-section { margin-top: 26px; padding-top: 22px; border-top: 1px solid #383b34; }
+.invoice-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.invoice-section h2.price-name { margin: 0 0 14px; }
+
+.requisites { margin: 0; display: grid; gap: 9px; }
+.requisites > div { display: grid; grid-template-columns: 116px 1fr; gap: 8px 14px; align-items: baseline; }
+.requisites dt { color: #9da096; font-size: 12px; }
+.requisites dd { margin: 0; color: #eceee8; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.requisites .requisites-note { grid-template-columns: 1fr; }
+.requisites .requisites-note dd { color: #aeb2a7; font-size: 12px; }
+
+.invoice-purpose { margin: 0; color: #d6d8d1; font-size: 13px; }
+.invoice-order-note { margin: 14px 0 6px; color: #9da096; font-size: 12px; }
+.invoice-order-number { margin: 0; color: var(--acid); font-size: clamp(20px, 2.4vw, 26px); font-weight: 800; overflow-wrap: anywhere; }
+.copy-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.copy-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid #555a4f; border-radius: var(--radius); background: #20231d; color: #d6d8d1; font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color .16s ease, color .16s ease; }
+.copy-button:hover { border-color: #8b9182; color: white; }
+.copy-button[data-state="done"] { border-color: var(--acid); color: var(--acid); }
+.copy-button[data-state="failed"] { border-color: var(--amber); color: #ffd79a; }
+
+.checkout-card .invoice-steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; color: #d6d8d1; font-size: 13px; line-height: 1.5; }
+.checkout-card .invoice-steps li::marker { color: var(--acid); font-weight: 800; }
+
+.invoice-eta { display: flex; gap: 9px; margin: 22px 0 0; padding: 11px 13px; border: 1px solid #383b34; border-radius: var(--radius); color: #aeb2a7; font-size: 12px; line-height: 1.5; }
+.invoice-eta > span:first-child { color: var(--amber); }
+
+.invoice-contacts { margin-top: 26px; padding-top: 22px; border-top: 1px solid #383b34; }
+.invoice-contacts h2.price-name { margin: 0 0 12px; }
+.invoice-contacts ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.invoice-contacts li { display: grid; grid-template-columns: 116px 1fr; gap: 14px; align-items: baseline; font-size: 13px; }
+.invoice-contacts span { color: #9da096; font-size: 12px; }
+.invoice-contacts a { color: white; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  .payment-copy h1.invoice-heading { font-size: clamp(26px, 7.4vw, 34px); max-width: none; }
+  .requisites > div, .invoice-contacts li { grid-template-columns: 1fr; gap: 2px; }
+  .copy-row .copy-button { flex: 1 1 auto; justify-content: center; }
+}

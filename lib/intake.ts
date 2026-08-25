@@ -1,3 +1,9 @@
+import { escapeTelegramHtml, line } from "./intake-notification.mjs";
+
+// The owner notification is built in intake-notification.mjs so the
+// administrative scripts share one implementation with the app.
+export { createIntakeNotification } from "./intake-notification.mjs";
+
 export type ReplyChannel = "telegram" | "email";
 
 export interface IntakeSubmission {
@@ -103,39 +109,37 @@ export function validateIntakeSubmission(value: unknown): IntakeResult {
   };
 }
 
-function escapeTelegramHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function line(label: string, value: string) {
-  return `<b>${label}:</b> ${escapeTelegramHtml(value || "—")}`;
-}
-
-// The invoice number is passed in from the confirmed order rather than taken
-// from the submission: it identifies a real payment, so it must not be
-// something the sender can choose.
-export function createIntakeNotification(data: IntakeSubmission, invoiceId?: string) {
-  const reply = data.replyChannel === "telegram"
-    ? `Telegram ${data.telegram}`
-    : `email ${data.email}`;
-
+/**
+ * Tells the owner that an organisation or sole trader has placed an order and
+ * is waiting for an invoice. Robokassa accepts payments from individuals only,
+ * so nothing else will announce this order — without it a business customer
+ * would sit waiting for bank details nobody knew to send.
+ *
+ * Carries only what is needed to raise the invoice and the receipt. The
+ * checkout session secret, connection strings and payment passwords are not
+ * part of the order data passed in and never appear here.
+ */
+export function createBusinessOrderNotification(order: {
+  invoiceId: string;
+  buyerName: string;
+  buyerInn: string;
+  email: string;
+  plan: string;
+  amount: string;
+  status: string;
+}) {
   return [
-    "<b>🔥 Новая анкета ПожТендера</b>",
-    invoiceId ? line("Номер платежа", invoiceId) : "",
-    line("Компания", data.company),
-    line("ИНН", data.inn),
-    line("Контакт", data.contactName),
-    line("Ответить", reply),
-    line("Email", data.email),
-    line("Telegram", data.telegram),
+    "<b>🧾 Новый заказ от организации — нужен счёт</b>",
+    line("Номер заказа", order.invoiceId),
+    line("Плательщик", order.buyerName),
+    line("ИНН", order.buyerInn),
+    line("Email", order.email),
+    line("Тариф", order.plan === "subscription" ? "Ежемесячное обслуживание" : "7-дневная калибровка"),
+    line("Сумма", `${order.amount} ₽`),
+    line("Статус", order.status),
     "",
-    line("Регионы", data.regions),
-    line("Виды работ", data.workTypes),
-    line("Диапазон НМЦК", data.budget),
-    line("Лицензии и допуски", data.licenses),
-    line("Стоп-факторы", data.exclusions),
-  ].filter((entry, index, entries) => entry || entries[index - 1]).join("\n").slice(0, 4_000);
+    "Выставьте счёт на этот email. После поступления оплаты подтвердите её командой "
+      + `<code>node scripts/confirm-bank-payment.mjs ${escapeTelegramHtml(order.invoiceId)}</code> `
+      + "и сформируйте чек НПД в «Мой налог» с ИНН покупателя.",
+  ].join("\n").slice(0, 4_000);
 }

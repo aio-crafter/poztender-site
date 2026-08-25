@@ -99,11 +99,18 @@ async function fetchAsset(assetRequest) {
 function sendResponse(nodeResponse, response, body, method) {
   nodeResponse.statusCode = response.status;
   nodeResponse.statusMessage = response.statusText;
+  // Set-Cookie is the one header that legitimately repeats. Iterating the
+  // Headers object yields each one separately, but setHeader() overwrites, so
+  // a response carrying two cookies would arrive with only the last. Collect
+  // them and set the whole array at once.
+  const setCookies =
+    typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
   for (const [name, value] of response.headers) {
-    if (!(["connection", "keep-alive", "transfer-encoding"].includes(name.toLowerCase()))) {
-      nodeResponse.setHeader(name, value);
-    }
+    const lower = name.toLowerCase();
+    if (["connection", "keep-alive", "transfer-encoding", "set-cookie"].includes(lower)) continue;
+    nodeResponse.setHeader(name, value);
   }
+  if (setCookies.length > 0) nodeResponse.setHeader("set-cookie", setCookies);
   if (method === "HEAD") {
     nodeResponse.end();
     return;

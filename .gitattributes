@@ -1,0 +1,5 @@
+# Migration SQL is hashed byte-for-byte by drizzle-orm, so line endings must
+# not change between checkouts. Pinning them to LF keeps the recorded hash
+# comparable to the file on disk.
+*.sql text eol=lf
+drizzle/meta/*.json text eol=lf

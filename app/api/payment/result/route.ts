@@ -1,4 +1,5 @@
 import { isDatabaseConfigured } from "../../../../db";
+import { deliverAccessEmail } from "../../../../lib/access-delivery";
 import { confirmPayment } from "../../../../lib/orders";
 import {
   createResultSignature,
@@ -105,15 +106,40 @@ async function handleResult(request: Request) {
       logCallback("rejected:amount-mismatch", invoiceId);
       return new Response("Amount does not match the order", { status: 400 });
 
+    case "not-a-robokassa-order":
+      // A business order settles by bank transfer, never through Robokassa.
+      // Acknowledging this would mark an unpaid invoice as settled.
+      logCallback("rejected:business-order", invoiceId);
+      return new Response("Order is not payable through Robokassa", { status: 409 });
+
     case "already-paid":
       // A retry or a concurrent delivery. Nothing was changed: paidAt keeps its
       // original value and no second grant exists. Robokassa still needs OK.
       logCallback("accepted:duplicate", invoiceId);
       break;
 
-    case "confirmed":
+    case "confirmed": {
       logCallback("accepted:confirmed", invoiceId);
+      // Access delivery is advisory and runs after the money is recorded: the
+      // customer may lose the cookie, switch device or clear their browser, and
+      // this link is how they get back in. A mail failure is logged and the
+      // payment still stands — never the other way round.
+      try {
+        const outcome = await deliverAccessEmail(
+          confirmation.order,
+          new URL(request.url).origin,
+        );
+        if (outcome !== "sent") {
+          logCallback(`accepted:confirmed-mail-${outcome}`, invoiceId);
+        }
+      } catch (error) {
+        console.error(
+          "[payment] access email threw",
+          error instanceof Error ? error.message : error,
+        );
+      }
       break;
+    }
   }
 
   return new Response(`OK${invoiceId}`, {

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Footer, Header, Steps } from "../site-chrome";
+import { CheckoutFields } from "./checkout-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -43,29 +44,8 @@ export default async function PaymentPage({ searchParams }: PaymentPageProps) {
           <span className="price-name">К оплате</span>
           <div className="price">4 900 <small>₽</small></div>
           <p>Без НДС в связи с применением НПД.</p>
-          {error === "email" && (
-            <p className="checkout-error" role="alert">
-              Не удалось распознать email. Проверьте адрес и попробуйте ещё раз.
-            </p>
-          )}
-          {error === "rate" && (
-            <p className="checkout-error" role="alert">
-              Слишком много попыток оплаты подряд. Подождите несколько минут и попробуйте ещё раз.
-            </p>
-          )}
-          {error === "store" && (
-            <p className="checkout-error" role="alert">
-              Не удалось начать оплату — заказ не был сохранён. Деньги не списаны. Повторите попытку через минуту или запросите счёт.
-            </p>
-          )}
           <form className="checkout-form" action="/api/payment/start" method="post">
-            <label>
-              Email для уведомления о платеже
-              <input name="email" type="email" required maxLength={160} autoComplete="email" placeholder="name@company.ru" />
-            </label>
-            <button className="button button-primary full" type="submit">
-              Оплатить онлайн <span aria-hidden="true">→</span>
-            </button>
+            <CheckoutFields error={error} individualLabel="Оплатить онлайн" />
           </form>
           <div className="payment-badges" aria-label="Способы оплаты">
             <span>МИР</span>

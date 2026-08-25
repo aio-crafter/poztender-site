@@ -1,12 +1,33 @@
 {
   "version": "7",
-  "dialect": "sqlite",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
       "version": "7",
       "when": 1787120564412,
       "tag": "0000_conscious_captain_cross",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787139092824,
+      "tag": "0001_previous_speed",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787214369992,
+      "tag": "0002_brief_captain_cross",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787636152495,
+      "tag": "0003_giant_marrow",
       "breakpoints": true
     }
   ]
