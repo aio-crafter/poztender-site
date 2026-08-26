@@ -1053,6 +1053,10 @@ test("a business order is created even with no Telegram configured at all", asyn
   }
 });
 
+/** Only the intake notifications, not the ResultURL payment confirmation. */
+const intakeCalls = (telegram) =>
+  telegram.calls.filter((call) => (call.body?.text ?? "").includes("Новая анкета"));
+
 test("a paid intake still reaches the owner through the shared sender", async () => {
   // Covers the delivery path that /api/intake shares with the checkout
   // notification, so the extraction into lib/telegram.ts stays verified.
@@ -1068,8 +1072,9 @@ test("a paid intake still reaches the owner through the shared sender", async ()
     });
     assert.equal(response.status, 201);
 
-    assert.equal(telegram.calls.length, 1);
-    const { text } = telegram.calls[0].body;
+    const intake = intakeCalls(telegram);
+    assert.equal(intake.length, 1);
+    const { text } = intake[0].body;
     assert.match(text, /Новая анкета/);
     assert.match(text, new RegExp(fields.InvId));
 
@@ -1096,7 +1101,7 @@ test("a failed intake delivery still accepts the form", async () => {
       body: JSON.stringify(validIntake()),
     });
     assert.equal(response.status, 201);
-    assert.equal(telegram.calls.length, 1);
+    assert.equal(intakeCalls(telegram).length, 1);
 
     const [stored] = await rows("SELECT * FROM intake_submissions");
     assert.ok(stored, "the form must be stored even though delivery failed");

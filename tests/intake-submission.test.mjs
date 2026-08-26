@@ -147,7 +147,10 @@ function interceptTelegram(mode) {
   globalThis.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input.url;
     if (!url.includes("api.telegram.org")) return original(input, init);
-    calls.push(url);
+    // The owner now receives two kinds of message: a payment confirmation from
+    // the ResultURL handler and the intake notification. Only the second one
+    // belongs to these tests, so the text is recorded to tell them apart.
+    calls.push(url.includes("/sendMessage") && init?.body ? JSON.parse(init.body).text : "");
     if (mode === "throws") throw new Error("network is down");
     const ok = mode !== "rejects";
     return new Response(JSON.stringify({ ok }), {
@@ -162,6 +165,9 @@ function interceptTelegram(mode) {
     },
   };
 }
+
+/** Only the intake notifications, not the payment confirmation. */
+const intakeCalls = (telegram) => telegram.calls.filter((text) => text.includes("Новая анкета"));
 
 async function withTelegram(mode, body) {
   const telegram = interceptTelegram(mode);
@@ -203,7 +209,7 @@ test("both channels working: the form is accepted", async () => {
     const { cookie, invoiceId } = await paidOrder();
     const stored = await assertAccepted(await submit(cookie), invoiceId);
 
-    assert.equal(telegram.calls.length, 1, "the owner is notified once");
+    assert.equal(intakeCalls(telegram).length, 1, "the owner is notified once");
     assert.ok(stored.telegram_notified_at, "a delivered notification is stamped");
   });
 });
@@ -276,7 +282,7 @@ test("a duplicate submit stores exactly one submission", async () => {
     const stored = await submissionRows();
     assert.equal(stored.length, 1, "the second submit must not add a row");
     assert.equal(stored[0].company, "ООО ПожСервис", "the first answers stand");
-    assert.equal(telegram.calls.length, 1, "the owner is not notified twice");
+    assert.equal(intakeCalls(telegram).length, 1, "the owner is not notified twice");
   });
 });
 
@@ -293,7 +299,7 @@ test("two concurrent submits store exactly one submission", async () => {
     assert.equal(stored[0].order_id, (await rows(
       `SELECT id FROM orders WHERE invoice_id = ${invoiceId}`,
     ))[0].id);
-    assert.equal(telegram.calls.length, 1, "only the winner notifies the owner");
+    assert.equal(intakeCalls(telegram).length, 1, "only the winner notifies the owner");
 
     const grants = await grantRows();
     assert.equal(grants.length, 1);
@@ -338,7 +344,7 @@ test("retrying delivery notifies again without creating a submission", async () 
   await withTelegram("delivers", async (telegram) => {
     const result = await redeliver(client, pending[0]);
     assert.equal(result.telegram, "sent");
-    assert.equal(telegram.calls.length, 1, "the owner is notified on the retry");
+    assert.equal(intakeCalls(telegram).length, 1, "the owner is notified on the retry");
   });
 
   const stored = await submissionRows();

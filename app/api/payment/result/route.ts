@@ -1,6 +1,10 @@
+import { after } from "next/server";
+
 import { isDatabaseConfigured } from "../../../../db";
 import { deliverAccessEmail } from "../../../../lib/access-delivery";
+import { createPaymentNotification } from "../../../../lib/intake-notification.mjs";
 import { confirmPayment } from "../../../../lib/orders";
+import { sendOwnerMessage, type TelegramEnvironment } from "../../../../lib/telegram";
 import {
   createResultSignature,
   planForAmount,
@@ -120,10 +124,43 @@ async function handleResult(request: Request) {
 
     case "confirmed": {
       logCallback("accepted:confirmed", invoiceId);
-      // Access delivery is advisory and runs after the money is recorded: the
-      // customer may lose the cookie, switch device or clear their browser, and
-      // this link is how they get back in. A mail failure is logged and the
-      // payment still stands — never the other way round.
+      // Everything below runs after confirmPayment's transaction has committed,
+      // and only on this branch: "confirmed" is returned to exactly one caller
+      // because the conditional UPDATE inside that transaction lets only one
+      // win. A retry lands on "already-paid" above and schedules nothing.
+
+      // The owner's notification leaves the critical path. Telegram can take
+      // twenty seconds to fail — twelve on the relay, eight on the direct call —
+      // and Robokassa must not wait for that to hear OK. after() hands the task
+      // to the platform's waitUntil (server.mjs collects it and drains it once
+      // the response is written), so this is tracked background work rather
+      // than a floating promise nobody owns.
+      after(
+        sendOwnerMessage(
+          process.env as TelegramEnvironment,
+          createPaymentNotification({
+            invoiceId: String(confirmation.order.invoiceId),
+            amount: confirmation.order.expectedAmount,
+            plan: confirmation.order.plan,
+            email: confirmation.order.email,
+            status: confirmation.order.status,
+          }),
+          "[payment]",
+        ).then((delivery) => {
+          // Observability survives the move: the callback has already been
+          // answered, so this is the only record that the owner was not told.
+          // `reason` is a fixed label, never a secret.
+          if (!delivery.ok) {
+            logCallback(`accepted:confirmed-telegram-${delivery.reason}`, invoiceId);
+          }
+        }),
+      );
+
+      // The access email stays on the critical path deliberately. It is the
+      // customer's only way back in after losing the cookie, nothing retries it
+      // automatically, and a container recycled between the response and a
+      // background task would lose it silently. It costs one HTTPS request to
+      // the mail relay, which is bounded and short.
       try {
         const outcome = await deliverAccessEmail(
           confirmation.order,
