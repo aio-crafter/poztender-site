@@ -208,9 +208,6 @@ async function handleStart(request: Request) {
     });
   }
 
-  const origin = url.origin;
-  const successUrl = `${origin}/payment/success`;
-  const failUrl = `${origin}/payment/failed`;
   const merchantLogin = runtimeEnv.ROBOKASSA_MERCHANT_LOGIN!;
   const invoiceId = String(order.invoiceId);
   const receipt = createReceipt(product);
@@ -220,10 +217,15 @@ async function handleStart(request: Request) {
     invoiceId,
     password: runtimeEnv.ROBOKASSA_PASSWORD_1!,
     receipt,
-    successUrl,
-    failUrl,
   });
 
+  // Where the customer comes back to is configured in the Robokassa account,
+  // not sent per request. The SuccessUrl2/FailUrl2 fields that used to be here
+  // were refused with error 29 by the live endpoint in every encoding tried,
+  // while the identical request without them was accepted. Success and Fail
+  // URLs live in the merchant account: https://poztender.ru/payment/success
+  // (GET) and https://poztender.ru/payment/failed (GET). Do not reintroduce
+  // them as form fields — see createPaymentSignature.
   const fields: Record<string, string> = {
     MerchantLogin: merchantLogin,
     OutSum: product.amount,
@@ -236,10 +238,6 @@ async function handleStart(request: Request) {
     // Derived from the same resolved mode that opened the checkout, so the
     // gate and the flag sent to Robokassa can never disagree.
     IsTest: paymentMode.mode === "test" ? "1" : "0",
-    SuccessUrl2: successUrl,
-    SuccessUrl2Method: "GET",
-    FailUrl2: failUrl,
-    FailUrl2Method: "GET",
   };
 
   const inputs = Object.entries(fields)

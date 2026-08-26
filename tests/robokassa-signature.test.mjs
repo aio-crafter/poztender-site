@@ -6,14 +6,20 @@
 // actually POSTs, so the base and the payload can never drift apart again, and
 // so any future change to the formula has to be a deliberate one.
 //
-// The contract asserted here is Robokassa's documented extended formula:
+// The contract asserted here:
 //
-//   MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method
-//     :FailUrl2:FailUrl2Method:Password#1
+//   MerchantLogin:OutSum:InvId:Receipt:Password#1
 //
-// The redirect URLs are in it because the form sends them as SuccessUrl2 and
-// FailUrl2. Dropping them from the base while still sending those fields is
-// the one combination the documentation rules out.
+// A live bisect against auth.robokassa.ru settled which shape the account
+// accepts. A minimal signed request was accepted; the same request with a raw
+// JSON receipt was refused with error 29; with the receipt percent-encoded it
+// was accepted again; and adding SuccessUrl2/FailUrl2 refused it once more, in
+// every encoding tried. A deliberately corrupted signature was refused too, so
+// the classifier that produced those verdicts was itself verified.
+//
+// So: the receipt is percent-encoded and signed, and the redirect addresses
+// come from the merchant account rather than from the request. The four
+// SuccessUrl2/FailUrl2 fields must not come back.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { after, before, beforeEach } from "node:test";
@@ -92,11 +98,8 @@ async function checkout(query = "email=buyer%40example.ru") {
 }
 
 /**
- * The documented base, rebuilt here from the fields the form really sends.
- *
- * Every URL-shaped value is percent-encoded, exactly as in Robokassa's own
- * worked example: `…:https%3A%2F%2Frobokassa.com%2F:GET:…`. The receipt is
- * already encoded when it reaches the form, so it is taken as-is.
+ * The base, rebuilt here from the fields the form really sends. The receipt is
+ * already percent-encoded when it reaches the form, so it is taken as-is.
  */
 function signatureBase(fields, password = PASSWORD_1) {
   return [
@@ -104,10 +107,6 @@ function signatureBase(fields, password = PASSWORD_1) {
     fields.OutSum,
     fields.InvId,
     fields.Receipt,
-    encodeURIComponent(fields.SuccessUrl2),
-    fields.SuccessUrl2Method,
-    encodeURIComponent(fields.FailUrl2),
-    fields.FailUrl2Method,
     password,
   ].join(":");
 }
@@ -188,48 +187,55 @@ test("Receipt is URL-encoded, and the same string is signed and posted", async (
   );
 });
 
-// --- redirect URLs --------------------------------------------------------
+// --- redirect URLs are the account's business, not the request's ----------
 
-test("the redirect URLs are sent as SuccessUrl2/FailUrl2 and are part of the base", async () => {
+test("the four SuccessUrl2/FailUrl2 fields are no longer posted", async () => {
   const fields = await checkout();
 
-  assert.equal(fields.SuccessUrl2, `${ORIGIN}/payment/success`);
-  assert.equal(fields.FailUrl2, `${ORIGIN}/payment/failed`);
-  assert.equal(fields.SuccessUrl2Method, "GET");
-  assert.equal(fields.FailUrl2Method, "GET");
-
-  // Robokassa's extended formula requires them once they are transmitted, so
-  // a base without them must NOT reproduce the signature. If this assertion
-  // ever flips, the four fields have to stop being posted in the same change.
-  const withoutUrls = [
-    fields.MerchantLogin,
-    fields.OutSum,
-    fields.InvId,
-    fields.Receipt,
-    PASSWORD_1,
-  ].join(":");
-  assert.notEqual(fields.SignatureValue, sha256(withoutUrls));
-
-  // And signing them raw — what produced error 29 — must not reproduce it
-  // either. This is the assertion that pins the fix.
-  const rawUrls = [
-    fields.MerchantLogin,
-    fields.OutSum,
-    fields.InvId,
-    fields.Receipt,
-    fields.SuccessUrl2,
-    fields.SuccessUrl2Method,
-    fields.FailUrl2,
-    fields.FailUrl2Method,
-    PASSWORD_1,
-  ].join(":");
-  assert.notEqual(fields.SignatureValue, sha256(rawUrls), "the URLs must be signed encoded");
+  for (const name of ["SuccessUrl2", "SuccessUrl2Method", "FailUrl2", "FailUrl2Method"]) {
+    assert.equal(fields[name], undefined, `${name} must not be sent`);
+  }
 });
 
-test("a different redirect URL produces a different signature", async () => {
+test("no redirect address appears anywhere in the checkout form", async () => {
+  const response = await request("/api/payment/start?email=buyer%40example.ru");
+  const html = await response.text();
+
+  // Not as a field, not as a stray value: the browser is handed nothing that
+  // names where the customer comes back to.
+  assert.doesNotMatch(html, /payment\/success/, "the success address is delegated");
+  assert.doesNotMatch(html, /payment\/failed/, "the fail address is delegated");
+  assert.doesNotMatch(html, /Url2/i);
+});
+
+test("no redirect value can reproduce the signature", async () => {
   const fields = await checkout();
-  const moved = { ...fields, SuccessUrl2: "https://elsewhere.example/payment/success" };
-  assert.notEqual(fields.SignatureValue, sha256(signatureBase(moved)));
+  const successUrl = `${ORIGIN}/payment/success`;
+  const failUrl = `${ORIGIN}/payment/failed`;
+
+  // Both shapes that were tried against the live endpoint and refused with
+  // error 29: the URLs percent-encoded in the base, and the URLs raw. Neither
+  // may come back.
+  const encoded = [
+    fields.MerchantLogin, fields.OutSum, fields.InvId, fields.Receipt,
+    encodeURIComponent(successUrl), "GET", encodeURIComponent(failUrl), "GET", PASSWORD_1,
+  ].join(":");
+  const raw = [
+    fields.MerchantLogin, fields.OutSum, fields.InvId, fields.Receipt,
+    successUrl, "GET", failUrl, "GET", PASSWORD_1,
+  ].join(":");
+
+  assert.notEqual(fields.SignatureValue, sha256(encoded), "encoded URLs are not in the base");
+  assert.notEqual(fields.SignatureValue, sha256(raw), "raw URLs are not in the base");
+  assert.equal(fields.SignatureValue, sha256(signatureBase(fields)));
+});
+
+test("the signed base is exactly MerchantLogin:OutSum:InvId:Receipt:Password#1", async () => {
+  const fields = await checkout();
+  const literal = `${fields.MerchantLogin}:${fields.OutSum}:${fields.InvId}:${fields.Receipt}:${PASSWORD_1}`;
+
+  assert.equal(fields.SignatureValue, sha256(literal));
+  assert.equal(literal.split(":").length, 5, "five colon-separated parts, nothing more");
 });
 
 // --- mode ------------------------------------------------------------------
@@ -288,28 +294,22 @@ test("ResultURL still verifies OutSum:InvId:Password#2 and nothing else", async 
   assert.equal(order.status, "paid");
 });
 
-test("the URLs are percent-encoded in the signature and raw in the form fields", async () => {
+test("the posted field set is exactly the nine fields the account expects", async () => {
   const fields = await checkout();
 
-  // The transport half: the hidden inputs carry the address a human can read.
-  // The browser percent-encodes them once when it submits the form, so
-  // encoding them here as well would send them doubly encoded.
-  assert.equal(fields.SuccessUrl2, "https://poztender.example/payment/success");
-  assert.equal(fields.FailUrl2, "https://poztender.example/payment/failed");
-  assert.doesNotMatch(fields.SuccessUrl2, /%3A|%2F/, "the form field must not be pre-encoded");
-  assert.doesNotMatch(fields.FailUrl2, /%3A|%2F/);
-
-  // The signature half: the base carries them encoded, matching Robokassa's
-  // worked example `…:https%3A%2F%2Frobokassa.com%2F:GET:…`.
-  const base = signatureBase(fields);
-  assert.ok(
-    base.includes("https%3A%2F%2Fpoztender.example%2Fpayment%2Fsuccess"),
-    "SuccessUrl2 must be percent-encoded in the base",
+  assert.deepEqual(
+    Object.keys(fields).sort(),
+    [
+      "Culture",
+      "Description",
+      "Email",
+      "InvId",
+      "IsTest",
+      "MerchantLogin",
+      "OutSum",
+      "Receipt",
+      "SignatureValue",
+    ],
+    "adding a field here means deciding whether it belongs in the signature too",
   );
-  assert.ok(
-    base.includes("https%3A%2F%2Fpoztender.example%2Fpayment%2Ffailed"),
-    "FailUrl2 must be percent-encoded in the base",
-  );
-  assert.ok(!base.includes("https://poztender.example"), "no raw URL survives into the base");
-  assert.equal(fields.SignatureValue, sha256(base));
 });

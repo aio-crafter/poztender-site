@@ -151,34 +151,28 @@ export async function createPaymentSignature(input: {
   invoiceId: string;
   password: string;
   receipt: string;
-  successUrl: string;
-  failUrl: string;
 }) {
-  // Robokassa's documented base for a payment that carries both a receipt and
-  // per-request redirect URLs:
+  // Robokassa's base for a payment that carries a receipt and takes its
+  // redirect addresses from the merchant account:
   //
-  //   MerchantLogin:OutSum:InvId:Receipt:SuccessUrl2:SuccessUrl2Method
-  //     :FailUrl2:FailUrl2Method:Password#1
+  //   MerchantLogin:OutSum:InvId:Receipt:Password#1
   //
-  // Every URL-shaped value in it is percent-encoded. Their own worked example
-  // reads `…:https%3A%2F%2Frobokassa.com%2F:GET:https%3A%2F%2Fwww.google.com%2F
-  // :GET:password1`, and the receipt in the same line is percent-encoded too —
-  // which is why createReceipt already returns an encoded string and is passed
-  // through unchanged here. Signing the two URLs raw produced error 29,
-  // "invalid SignatureValue", on live checkout.
+  // The receipt is percent-encoded, which is what createReceipt already
+  // returns, so it is passed through unchanged.
   //
-  // The hidden form fields stay raw: the browser percent-encodes them once
-  // when it submits application/x-www-form-urlencoded, so the encoding belongs
-  // to the transport there and to this string here.
+  // The per-request redirect variant — SuccessUrl2/FailUrl2 and their methods
+  // inside the base — was measured against the live endpoint and refused with
+  // error 29, "invalid SignatureValue", in every encoding tried, while the
+  // same request without those fields was accepted. Success and Fail
+  // redirection is therefore configured in the Robokassa account and must not
+  // be reintroduced as request fields: adding them back without also putting
+  // them in this base is the one combination the documentation rules out, and
+  // putting them in this base is what error 29 was.
   const signatureBase = [
     input.merchantLogin,
     input.amount,
     input.invoiceId,
     input.receipt,
-    encodeURIComponent(input.successUrl),
-    "GET",
-    encodeURIComponent(input.failUrl),
-    "GET",
     input.password,
   ].join(":");
 
