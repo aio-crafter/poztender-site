@@ -51,7 +51,10 @@ async function main() {
       );
     }
     if (outcome === "not-configured") {
-      throw new OperatorError("YANDEX_SMTP_USER / YANDEX_SMTP_PASSWORD are not set");
+      throw new OperatorError(
+        "email delivery is not configured: set EMAIL_RELAY_URL and EMAIL_RELAY_SECRET, " +
+          "or YANDEX_SMTP_USER and YANDEX_SMTP_PASSWORD for a direct connection",
+      );
     }
     throw new OperatorError("the mail server rejected the message; see the error above");
   } finally {

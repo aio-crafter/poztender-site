@@ -9,8 +9,12 @@
 //
 //   DATABASE_URL='postgresql://…?sslmode=verify-full' \
 //   TELEGRAM_BOT_TOKEN='…' TELEGRAM_OWNER_CHAT_ID='…' \
-//   YANDEX_SMTP_USER='…' YANDEX_SMTP_PASSWORD='…' \
+//   EMAIL_RELAY_URL='…' EMAIL_RELAY_SECRET='…' \
 //     node scripts/resend-intake-notifications.mjs [<invoiceId>] [--force]
+//
+// Either mail transport works: the relay variables above, or
+// YANDEX_SMTP_USER/YANDEX_SMTP_PASSWORD for a direct connection — sendMail
+// picks whichever is configured.
 //
 // With no invoice number it works through every form that is still missing a
 // delivery. It creates no submission, spends no grant and changes no order or

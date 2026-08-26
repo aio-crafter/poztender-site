@@ -7,7 +7,7 @@
 // way. tests/access-delivery.test.mjs pins the two implementations together.
 import { createHash, randomBytes } from "node:crypto";
 import { accessEmailHtml, accessEmailSubject, accessEmailText } from "../../lib/access-email.mjs";
-import { sendMail } from "../../lib/smtp.mjs";
+import { isEmailReady, sendMail } from "../../lib/smtp.mjs";
 
 export function createAccessToken() {
   return randomBytes(32).toString("base64url");
@@ -50,7 +50,11 @@ export async function issueAccessLink(client, orderId) {
  */
 export async function deliverAccessEmail(client, order, origin) {
   const env = process.env;
-  if (!env.YANDEX_SMTP_USER || !env.YANDEX_SMTP_PASSWORD) return "not-configured";
+  // The same readiness check the app uses, so this cannot fall behind the
+  // transports sendMail knows about. It used to test the Yandex credentials
+  // directly, which reported "not-configured" on exactly the deployment that
+  // works: a host behind the HTTPS relay holds no SMTP password by design.
+  if (!isEmailReady(env)) return "not-configured";
 
   const link = await issueAccessLink(client, order.id);
   if (!link) return "no-link";
