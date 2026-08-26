@@ -3,22 +3,13 @@ import { getDb } from "../db";
 import { accessGrants, accessLinks, orders, type AccessGrant, type Order } from "../db/schema";
 import type { BuyerDetails } from "./buyer";
 import { hashAccessToken, hashSessionSecret } from "./payment-session";
-import {
-  createInvoiceId,
-  LIVE_SMOKE_PLAN,
-  productForPlan,
-  type PaymentPlan,
-} from "./robokassa";
+import { createInvoiceId, productForPlan, type PaymentPlan } from "./robokassa";
 
 // How long a confirmed payment entitles the customer, measured from the
 // moment the payment was confirmed rather than from when a page was opened.
 export const ACCESS_WINDOW_SECONDS: Record<PaymentPlan, number> = {
   pilot: 7 * 24 * 60 * 60,
   subscription: 30 * 24 * 60 * 60,
-  // The smoke tariff buys no service, so its grant is short: long enough to
-  // walk the recovery link and the success page, not long enough to leave a
-  // live entitlement lying around after the rail is proven.
-  "live-smoke": 24 * 60 * 60,
 };
 
 /**
@@ -154,12 +145,10 @@ export async function confirmPayment(input: {
       return { outcome: "already-paid", order };
     }
 
-    // The order's own plan decides the window. Collapsing anything unknown to
-    // "pilot" would have given a ten-rouble smoke order a seven-day grant.
-    const plan: PaymentPlan =
-      order.plan === "subscription" || order.plan === LIVE_SMOKE_PLAN
-        ? (order.plan as PaymentPlan)
-        : "pilot";
+    // Exhaustive while PaymentPlan has exactly these two members. A third
+    // tariff must be added here as well, or it would silently inherit the
+    // pilot access window.
+    const plan: PaymentPlan = order.plan === "subscription" ? "subscription" : "pilot";
     await tx
       .insert(accessGrants)
       .values({
