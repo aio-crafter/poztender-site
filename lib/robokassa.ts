@@ -15,10 +15,41 @@ export const subscriptionProduct = {
     "Информационно-аналитические услуги: ежемесячное обслуживание тендерного радара АПС и СОУЭ",
 } as const;
 
-export type PaymentPlan = "pilot" | "subscription";
+/**
+ * A temporary tariff for verifying the live payment rail end to end.
+ *
+ * It exists so the first real card payment through production costs ten
+ * roubles instead of a full tariff. It is not a product: nothing links to it,
+ * and the checkout refuses it unless ROBOKASSA_LIVE_SMOKE_TEST is exactly
+ * "true". Remove it, or leave the flag off, once the rail is proven.
+ */
+export const liveSmokeProduct = {
+  amount: "10.00",
+  description: "Проверка подключения платёжного сервиса",
+  receiptName: "Проверка подключения платежного сервиса ПожТендер",
+} as const;
+
+export const LIVE_SMOKE_PLAN = "live-smoke";
+
+export type PaymentPlan = "pilot" | "subscription" | "live-smoke";
 
 export function productForPlan(plan: string | null | undefined) {
+  if (plan === LIVE_SMOKE_PLAN) return liveSmokeProduct;
   return plan === "subscription" ? subscriptionProduct : paymentProduct;
+}
+
+/**
+ * Whether the ten-rouble smoke tariff may be started right now.
+ *
+ * Strict like the other payment flags: only the exact string "true" opens it,
+ * so a typo leaves it closed rather than quietly selling a ten-rouble order.
+ *
+ * Deliberately consulted only at checkout. An order that was already created
+ * and paid must still settle through ResultURL after the flag is turned off —
+ * money that has arrived cannot be un-arrived by an environment variable.
+ */
+export function isLiveSmokeEnabled(env: RobokassaEnvironment) {
+  return env.ROBOKASSA_LIVE_SMOKE_TEST === "true";
 }
 
 // Robokassa documents OutSum as a decimal string with a dot separator, but the
@@ -36,6 +67,11 @@ export function planForAmount(outSum: string): PaymentPlan | null {
   const amount = Number(outSum);
   if (amount === Number(paymentProduct.amount)) return "pilot";
   if (amount === Number(subscriptionProduct.amount)) return "subscription";
+  // Not gated on the flag: a smoke order that has already been paid for must
+  // still be settleable after the flag is turned off. This only recognises the
+  // shape of a known amount — confirmPayment still compares the callback
+  // against the order's own expectedAmount before anything is marked paid.
+  if (amount === Number(liveSmokeProduct.amount)) return LIVE_SMOKE_PLAN;
   return null;
 }
 
@@ -45,6 +81,7 @@ export interface RobokassaEnvironment {
   ROBOKASSA_PASSWORD_2?: string;
   ROBOKASSA_TEST_MODE?: string;
   ROBOKASSA_B2B_RECEIPT_CONFIRMED?: string;
+  ROBOKASSA_LIVE_SMOKE_TEST?: string;
 }
 
 export type PaymentMode = "test" | "live";

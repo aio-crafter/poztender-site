@@ -15,6 +15,8 @@ import {
   createPaymentSignature,
   createReceipt,
   escapeHtml,
+  isLiveSmokeEnabled,
+  LIVE_SMOKE_PLAN,
   productForPlan,
   resolvePaymentMode,
   type PaymentPlan,
@@ -25,7 +27,9 @@ export const dynamic = "force-dynamic";
 
 /** Only these identifiers exist. Anything else is not a tariff. */
 function readPlan(value: string | null): PaymentPlan {
-  return value === "subscription" ? "subscription" : "pilot";
+  if (value === "subscription") return "subscription";
+  if (value === LIVE_SMOKE_PLAN) return LIVE_SMOKE_PLAN;
+  return "pilot";
 }
 
 const SUBMISSION_FIELDS = ["plan", "email", "buyerType", "buyerInn", "buyerName"] as const;
@@ -119,6 +123,29 @@ async function handleStart(request: Request) {
       console.error(`[payment] checkout closed, fix this variable: ${paymentMode.reason}`);
     }
     return Response.redirect(new URL("/payment/unavailable", request.url), 303);
+  }
+
+  // The ten-rouble rail check is not a product. It exists only while
+  // ROBOKASSA_LIVE_SMOKE_TEST is exactly "true", is never linked from the
+  // site, and is answered with 404 rather than an explanation the rest of the
+  // time — an unknown tariff should look unknown. Placed after the mode gate
+  // so it cannot be used to probe whether the checkout is otherwise open.
+  if (plan === LIVE_SMOKE_PLAN) {
+    if (!isLiveSmokeEnabled(runtimeEnv)) {
+      return new Response("Not found", {
+        status: 404,
+        headers: { "cache-control": "no-store, max-age=0" },
+      });
+    }
+    if (isBusiness) {
+      // Business orders are settled by bank transfer and never touch this
+      // rail, so a smoke order for one would prove nothing about it.
+      return new Response("Not found", {
+        status: 404,
+        headers: { "cache-control": "no-store, max-age=0" },
+      });
+    }
+    console.error("[payment] live smoke checkout started (ROBOKASSA_LIVE_SMOKE_TEST is on)");
   }
 
   // The price is looked up from the plan identifier here and written to the
